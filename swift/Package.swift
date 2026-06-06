@@ -18,11 +18,11 @@ let package = Package(
             ],
             path: "Sources",
             linkerSettings: [
-                .linkedFramework("IOKit"),
-                .linkedFramework("AVFoundation"),
-                .linkedFramework("CoreMedia"),
-                .linkedFramework("CoreVideo"),
-                .linkedFramework("Accelerate")
+                .linkedFramework("IOKit", .when(platforms: [.macOS])),
+                .linkedFramework("AVFoundation", .when(platforms: [.macOS])),
+                .linkedFramework("CoreMedia", .when(platforms: [.macOS])),
+                .linkedFramework("CoreVideo", .when(platforms: [.macOS])),
+                .linkedFramework("Accelerate", .when(platforms: [.macOS]))
             ]
         ),
         .testTarget(

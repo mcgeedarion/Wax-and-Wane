@@ -49,6 +49,14 @@ struct RingBuffer {
     var isEmpty: Bool { count == 0 }
 }
 
+
+func clampUnit(_ value: Float) -> Float { min(max(value, 0.0), 1.0) }
+
+func normalizeAmbient(_ ambient: Float, dark: Float, bright: Float, gamma: Float) -> Float {
+    let linear = clampUnit((ambient - dark) / (bright - dark))
+    return pow(linear, gamma)
+}
+
 func mapAmbient(_ ambient: Float, minValue: Float, maxValue: Float, invert: Bool) -> Float {
     invert ? maxValue - ambient * (maxValue - minValue)
            : minValue + ambient * (maxValue - minValue)
@@ -239,5 +247,17 @@ final class ComputeTargetsTests: XCTestCase {
         _ = computeTargets(history: &h, ambientNow: 0.3, lastKeyboard: -1, lastScreen: -1, s: s)
         _ = computeTargets(history: &h, ambientNow: 0.6, lastKeyboard: 0, lastScreen: 0, s: s)
         XCTAssertEqual(h.mean, 0.45, accuracy: 1e-5)
+    }
+}
+
+
+final class CalibrationTests: XCTestCase {
+    func testCalibrationGammaChangesTarget() {
+        XCTAssertEqual(normalizeAmbient(0.5, dark: 0.2, bright: 0.8, gamma: 2.0), 0.25, accuracy: 1e-5)
+    }
+
+    func testCalibrationClampsDarkAndBright() {
+        XCTAssertEqual(normalizeAmbient(0.0, dark: 0.2, bright: 0.8, gamma: 1.0), 0.0, accuracy: 1e-5)
+        XCTAssertEqual(normalizeAmbient(1.0, dark: 0.2, bright: 0.8, gamma: 1.0), 1.0, accuracy: 1e-5)
     }
 }
