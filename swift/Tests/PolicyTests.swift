@@ -157,6 +157,19 @@ final class CalibrationTests: XCTestCase {
     }
 }
 
+final class BrightnessParserTests: XCTestCase {
+    func testPrefersBrightnessValueOverDisplayID() {
+        let output = "display 1: main, active\n\tbrightness 0.375000"
+
+        XCTAssertEqual(parseFirstUnitFloat(output) ?? -1, 0.375, accuracy: 1e-5)
+    }
+
+    func testFallsBackToLastUnitFloat() {
+        XCTAssertEqual(parseFirstUnitFloat("display 1 value 0.625") ?? -1, 0.625, accuracy: 1e-5)
+    }
+}
+
+
 final class BackendSecurityTests: XCTestCase {
     func testProcessLauncherTimesOutSlowHelper() {
         let result = ProcessLauncher().run(

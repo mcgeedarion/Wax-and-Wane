@@ -117,10 +117,19 @@ func screenCandidates() -> [BackendCandidate] {
 }
 
 func parseFirstUnitFloat(_ text: String) -> Float? {
-    let pattern = #"(?:0(?:\.\d+)?|1(?:\.0+)?)"#
-    guard let regex = try? NSRegularExpression(pattern: pattern),
-          let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-          let range = Range(match.range, in: text) else { return nil }
+    let unitPattern = #"(?:0(?:\.\d+)?|1(?:\.0+)?)"#
+    let fullRange = NSRange(text.startIndex..., in: text)
+
+    if let brightnessRegex = try? NSRegularExpression(pattern: #"brightness\s+("# + unitPattern + #")"#, options: [.caseInsensitive]),
+       let match = brightnessRegex.firstMatch(in: text, range: fullRange),
+       match.numberOfRanges > 1,
+       let range = Range(match.range(at: 1), in: text) {
+        return Float(text[range])
+    }
+
+    guard let regex = try? NSRegularExpression(pattern: unitPattern) else { return nil }
+    let matches = regex.matches(in: text, range: fullRange)
+    guard let match = matches.last, let range = Range(match.range, in: text) else { return nil }
     return Float(text[range])
 }
 

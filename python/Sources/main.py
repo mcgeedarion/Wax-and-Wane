@@ -322,8 +322,14 @@ class BrightnessBackend:
 
 def _parse_first_unit_float(text: str) -> Optional[float]:
     import re
-    match = re.search(r"(?:0(?:\.\d+)?|1(?:\.0+)?)", text)
-    return float(match.group(0)) if match else None
+
+    unit_float = r"(?:0(?:\.\d+)?|1(?:\.0+)?)"
+    brightness_match = re.search(rf"brightness\s+({unit_float})", text, re.IGNORECASE)
+    if brightness_match:
+        return float(brightness_match.group(1))
+
+    matches = re.findall(unit_float, text)
+    return float(matches[-1]) if matches else None
 
 
 _KEYBOARD_CANDIDATES = [
