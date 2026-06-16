@@ -161,6 +161,20 @@ class SettingsValidationTests:
         assert kbd == pytest.approx(0.25)
 
 
+class BrightnessParserTests:
+    def test_prefers_brightness_value_over_display_id(self):
+        from python.Sources.main import _parse_first_unit_float
+
+        output = "display 1: main, active\n\tbrightness 0.375000"
+
+        assert _parse_first_unit_float(output) == pytest.approx(0.375)
+
+    def test_falls_back_to_last_unit_float(self):
+        from python.Sources.main import _parse_first_unit_float
+
+        assert _parse_first_unit_float("display 1 value 0.625") == pytest.approx(0.625)
+
+
 class BackendSecurityTests:
     def test_backend_read_timeout_returns_none(self, monkeypatch):
         import sys
