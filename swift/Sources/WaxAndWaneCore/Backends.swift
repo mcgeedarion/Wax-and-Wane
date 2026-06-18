@@ -9,13 +9,53 @@ let trustedWorkingDirectory = NSHomeDirectory()
 let safePathEntries = ["/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"]
 let backendCommandTimeoutSeconds: TimeInterval = 5.0
 
+func directoryTrusted(_ path: String) -> Bool {
+    let fm = FileManager.default
+    var isDirectory: ObjCBool = false
+    guard fm.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue else { return false }
+
+    do {
+        let attrs = try fm.attributesOfItem(atPath: path)
+        let mode = (attrs[.posixPermissions] as? NSNumber)?.uint16Value ?? 0
+        if mode & 0o022 != 0 {
+            fputs("Warning: ignoring writable helper directory: \(path)\n", stderr)
+            return false
+        }
+
+        let owner = (attrs[.ownerAccountID] as? NSNumber)?.uint32Value ?? UInt32.max
+        #if os(Linux)
+        let effectiveUID = geteuid()
+        #else
+        let effectiveUID = geteuid()
+        #endif
+        let ownerTrusted = effectiveUID == 0 ? owner == 0 : owner == 0 || owner == effectiveUID
+        if !ownerTrusted {
+            fputs("Warning: ignoring helper directory with untrusted owner uid \(owner): \(path)\n", stderr)
+            return false
+        }
+        return true
+    } catch {
+        fputs("Warning: ignoring helper directory \(path): \(error.localizedDescription)\n", stderr)
+        return false
+    }
+}
+
+func trustedPathEntries() -> [String] {
+    safePathEntries.filter(directoryTrusted)
+}
+
 func resolveExecutable(_ command: String) -> String? {
     let fm = FileManager.default
-    for base in safePathEntries {
+    let trustedEntries = trustedPathEntries()
+    if trustedEntries.isEmpty {
+        fputs("Warning: no trusted helper directories are available.\n", stderr)
+        return nil
+    }
+    for base in trustedEntries {
         let candidate = URL(fileURLWithPath: base).appendingPathComponent(command).path
         guard fm.isExecutableFile(atPath: candidate) else { continue }
         let real = URL(fileURLWithPath: candidate).resolvingSymlinksInPath().path
-        let inTrusted = safePathEntries.contains { prefix in real == prefix || real.hasPrefix(prefix + "/") }
+        let inTrusted = trustedEntries.contains { prefix in real == prefix || real.hasPrefix(prefix + "/") }
         if inTrusted { return real }
         fputs("Warning: ignoring unsafe symlink target for \(command): \(real)\n", stderr)
     }
@@ -28,7 +68,7 @@ func sanitizedEnvironment() -> [String: String] {
     for key in ["LANG", "LC_ALL", "LC_CTYPE", "HOME"] {
         if let v = current[key] { env[key] = v }
     }
-    env["PATH"] = safePathEntries.joined(separator: ":")
+    env["PATH"] = trustedPathEntries().joined(separator: ":")
     return env
 }
 

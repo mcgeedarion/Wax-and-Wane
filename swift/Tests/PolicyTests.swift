@@ -171,6 +171,16 @@ final class BrightnessParserTests: XCTestCase {
 
 
 final class BackendSecurityTests: XCTestCase {
+    func testRejectsWorldWritableHelperDirectory() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wax-and-wane-helper-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: dir.path)
+
+        XCTAssertFalse(directoryTrusted(dir.path))
+    }
+
     func testProcessLauncherTimesOutSlowHelper() {
         let result = ProcessLauncher().run(
             executablePath: "/bin/sleep",

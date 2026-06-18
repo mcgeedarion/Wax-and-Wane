@@ -59,6 +59,19 @@ Current mitigation:
 - A configurable maximum runtime stops the loop by default.
 - Periodic reminders notify/log that camera capture is active.
 
+### 5) Writable trusted helper directories can reintroduce PATH hijacking (Medium) — Fixed
+The helper allow-list includes common Homebrew locations. If one of those
+locations is group/world writable, or if the daemon is launched with elevated
+privileges while a helper directory is owned by an unprivileged account, helper
+resolution can again become arbitrary code execution.
+
+Mitigation implemented:
+- Python and Swift now filter the helper directory allow-list before lookup.
+- Helper directories must not be group- or world-writable.
+- When running elevated, helper directories must be root-owned; otherwise they
+  must be owned by root or the current user.
+- The sanitized child-process PATH is built from the same trusted directory set.
+
 ## Notes
 - No command-injection sink was found: helper commands are executed as argument
   arrays, not through a shell.
