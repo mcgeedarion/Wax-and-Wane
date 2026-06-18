@@ -451,6 +451,17 @@ def _threshold_for_delta(delta: float, change_threshold: float, rise_threshold: 
     return change_threshold
 
 
+@dataclass(frozen=True)
+class OutputChannelSettings:
+    """Settings needed to compute one brightness channel target."""
+
+    control: str
+    minimum: float
+    maximum: float
+    invert: bool
+    manual_value: float
+
+
 def target_for_control(
     control: str,
     smoothed_ambient: float,
@@ -464,14 +475,33 @@ def target_for_control(
     fall_threshold: Optional[float] = None,
 ) -> Optional[float]:
     """Return the target for one brightness channel, or None if untouched."""
-    if control == "system":
+    return target_for_channel(
+        OutputChannelSettings(control, minimum, maximum, invert, manual_value),
+        smoothed_ambient,
+        last_value,
+        change_threshold,
+        rise_threshold,
+        fall_threshold,
+    )
+
+
+def target_for_channel(
+    channel: OutputChannelSettings,
+    smoothed_ambient: float,
+    last_value: float,
+    change_threshold: float,
+    rise_threshold: Optional[float] = None,
+    fall_threshold: Optional[float] = None,
+) -> Optional[float]:
+    """Return the target for one brightness output channel, or None if untouched."""
+    if channel.control == "system":
         return None
-    if control == "manual":
-        target = manual_value
-    elif control == "auto":
-        target = map_ambient(smoothed_ambient, minimum, maximum, invert)
+    if channel.control == "manual":
+        target = channel.manual_value
+    elif channel.control == "auto":
+        target = map_ambient(smoothed_ambient, channel.minimum, channel.maximum, channel.invert)
     else:
-        raise ValueError(f"Unsupported brightness control mode: {control}")
+        raise ValueError(f"Unsupported brightness control mode: {channel.control}")
 
     delta = target - last_value
     threshold = _threshold_for_delta(delta, change_threshold, rise_threshold, fall_threshold)
@@ -493,31 +523,23 @@ def compute_targets(
     smoothed = sum(history) / len(history) if history else 0.0
     calibrated = normalize_ambient(smoothed, s.ambient_dark, s.ambient_bright, s.output_gamma)
 
-    new_kbd = target_for_control(
-        s.keyboard_control,
-        calibrated,
-        last_keyboard,
-        s.keyboard_min,
-        s.keyboard_max,
-        s.invert_keyboard,
-        s.manual_keyboard_brightness,
-        s.change_threshold,
-        s.rise_threshold,
-        s.fall_threshold,
+    channels = (
+        OutputChannelSettings(
+            s.keyboard_control, s.keyboard_min, s.keyboard_max,
+            s.invert_keyboard, s.manual_keyboard_brightness,
+        ),
+        OutputChannelSettings(
+            s.screen_control, s.screen_min, s.screen_max,
+            s.invert_screen, s.manual_screen_brightness,
+        ),
     )
-    new_scr = target_for_control(
-        s.screen_control,
-        calibrated,
-        last_screen,
-        s.screen_min,
-        s.screen_max,
-        s.invert_screen,
-        s.manual_screen_brightness,
-        s.change_threshold,
-        s.rise_threshold,
-        s.fall_threshold,
+    return tuple(
+        target_for_channel(
+            channel, calibrated, last_value, s.change_threshold,
+            s.rise_threshold, s.fall_threshold,
+        )
+        for channel, last_value in zip(channels, (last_keyboard, last_screen))
     )
-    return new_kbd, new_scr
 
 
 
