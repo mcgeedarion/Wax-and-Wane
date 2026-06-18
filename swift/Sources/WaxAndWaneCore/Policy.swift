@@ -42,6 +42,14 @@ func thresholdForDelta(_ delta: Float, changeThreshold: Float, riseThreshold: Fl
     return changeThreshold
 }
 
+struct OutputChannelSettings {
+    let control: BrightnessControl
+    let minValue: Float
+    let maxValue: Float
+    let invert: Bool
+    let manualValue: Float
+}
+
 func targetForControl(
     control: BrightnessControl,
     smoothedAmbient: Float,
@@ -54,14 +62,38 @@ func targetForControl(
     riseThreshold: Float? = nil,
     fallThreshold: Float? = nil
 ) -> Float? {
+    targetForChannel(
+        OutputChannelSettings(
+            control: control,
+            minValue: minValue,
+            maxValue: maxValue,
+            invert: invert,
+            manualValue: manualValue
+        ),
+        smoothedAmbient: smoothedAmbient,
+        lastValue: lastValue,
+        changeThreshold: changeThreshold,
+        riseThreshold: riseThreshold,
+        fallThreshold: fallThreshold
+    )
+}
+
+func targetForChannel(
+    _ channel: OutputChannelSettings,
+    smoothedAmbient: Float,
+    lastValue: Float,
+    changeThreshold: Float,
+    riseThreshold: Float? = nil,
+    fallThreshold: Float? = nil
+) -> Float? {
     let target: Float
-    switch control {
+    switch channel.control {
     case .system:
         return nil
     case .manual:
-        target = manualValue
+        target = channel.manualValue
     case .auto:
-        target = mapAmbient(smoothedAmbient, minValue: minValue, maxValue: maxValue, invert: invert)
+        target = mapAmbient(smoothedAmbient, minValue: channel.minValue, maxValue: channel.maxValue, invert: channel.invert)
     }
     let delta = target - lastValue
     return abs(delta) > thresholdForDelta(delta, changeThreshold: changeThreshold, riseThreshold: riseThreshold, fallThreshold: fallThreshold) ? target : nil
@@ -78,27 +110,34 @@ func computeTargets(
     let smoothedRaw = history.mean
     let calibrated = normalizeAmbient(smoothedRaw, dark: s.ambientDark, bright: s.ambientBright, gamma: s.outputGamma)
 
+    let keyboard = OutputChannelSettings(
+        control: s.keyboardControl,
+        minValue: s.keyboardMin,
+        maxValue: s.keyboardMax,
+        invert: s.invertKeyboard,
+        manualValue: s.manualKeyboardBrightness
+    )
+    let screen = OutputChannelSettings(
+        control: s.screenControl,
+        minValue: s.screenMin,
+        maxValue: s.screenMax,
+        invert: s.invertScreen,
+        manualValue: s.manualScreenBrightness
+    )
+
     return (
-        targetForControl(
-            control: s.keyboardControl,
+        targetForChannel(
+            keyboard,
             smoothedAmbient: calibrated,
             lastValue: lastKeyboard,
-            minValue: s.keyboardMin,
-            maxValue: s.keyboardMax,
-            invert: s.invertKeyboard,
-            manualValue: s.manualKeyboardBrightness,
             changeThreshold: s.changeThreshold,
             riseThreshold: s.riseThreshold,
             fallThreshold: s.fallThreshold
         ),
-        targetForControl(
-            control: s.screenControl,
+        targetForChannel(
+            screen,
             smoothedAmbient: calibrated,
             lastValue: lastScreen,
-            minValue: s.screenMin,
-            maxValue: s.screenMax,
-            invert: s.invertScreen,
-            manualValue: s.manualScreenBrightness,
             changeThreshold: s.changeThreshold,
             riseThreshold: s.riseThreshold,
             fallThreshold: s.fallThreshold
