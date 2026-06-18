@@ -207,3 +207,19 @@ class BackendSecurityTests:
         )
 
         main.run_backend(backend, 0.5, "test brightness")
+
+    def test_rejects_world_writable_helper_directory(self, tmp_path, monkeypatch):
+        import python.Sources.main as main
+
+        helper_dir = tmp_path / "bin"
+        helper_dir.mkdir()
+        helper = helper_dir / "brightness"
+        helper.write_text("#!/bin/sh\nexit 0\n")
+        helper.chmod(0o755)
+        helper_dir.chmod(0o777)
+        monkeypatch.setattr(main, "SAFE_EXEC_DIRS", (str(helper_dir),))
+
+        try:
+            assert main._resolve_executable("brightness") is None
+        finally:
+            helper_dir.chmod(0o755)

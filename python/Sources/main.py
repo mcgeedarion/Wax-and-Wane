@@ -263,19 +263,54 @@ TRUSTED_CWD = os.path.expanduser("~")
 BACKEND_TIMEOUT_SEC = 5.0
 
 
+def _directory_trusted(path: str) -> bool:
+    """Return True when a helper directory is safe for child execution.
+
+    When the daemon is launched with elevated privileges, a user-writable
+    Homebrew-style directory in the helper allow-list can turn backend lookup
+    into local privilege escalation. Require trusted directories to be owned by
+    root while elevated, or by root/the current user otherwise, and never be
+    group- or world-writable.
+    """
+    try:
+        st = os.stat(path)
+    except OSError as exc:
+        log.warning("Ignoring helper directory %s: %s", path, exc)
+        return False
+
+    if st.st_mode & 0o022:
+        log.warning("Ignoring writable helper directory: %s", path)
+        return False
+
+    effective_uid = os.geteuid() if hasattr(os, "geteuid") else os.getuid()
+    trusted_owners = {0} if effective_uid == 0 else {0, effective_uid}
+    if st.st_uid not in trusted_owners:
+        log.warning("Ignoring helper directory with untrusted owner uid %s: %s", st.st_uid, path)
+        return False
+    return True
+
+
+def _trusted_exec_dirs() -> Tuple[str, ...]:
+    return tuple(path for path in SAFE_EXEC_DIRS if _directory_trusted(path))
+
+
 def _resolve_executable(name: str) -> Optional[str]:
-    """Resolve a helper name to an absolute path under SAFE_EXEC_DIRS only.
+    """Resolve a helper name to an absolute path under trusted SAFE_EXEC_DIRS only.
 
     Also validates the symlink target so a malicious symlink pointing outside
     the trusted directories cannot bypass the allowlist.
     """
-    resolved = shutil.which(name, path=SAFE_ENV["PATH"])
+    trusted_dirs = _trusted_exec_dirs()
+    if not trusted_dirs:
+        log.warning("No trusted helper directories are available.")
+        return None
+    resolved = shutil.which(name, path=":".join(trusted_dirs))
     if not resolved:
         return None
     real = os.path.realpath(resolved)
     if any(
         real.startswith(prefix + os.sep) or real == prefix
-        for prefix in SAFE_EXEC_DIRS
+        for prefix in trusted_dirs
     ):
         return real
     log.warning("Ignoring unsafe executable path for %s: %s", name, real)
