@@ -175,6 +175,24 @@ class BrightnessParserTests:
         assert _parse_first_unit_float("display 1 value 0.625") == pytest.approx(0.625)
 
 
+class CaptureTests:
+    def test_capture_mean_brightness_returns_none_when_no_frames(self, monkeypatch):
+        import sys
+        import types
+        import python.Sources.main as main
+
+        class FakeCap:
+            def read(self):
+                return False, None
+
+        fake_cv2 = types.SimpleNamespace()
+        fake_np = types.SimpleNamespace(mean=lambda x: 0.0)
+        monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
+        monkeypatch.setitem(sys.modules, "numpy", fake_np)
+
+        assert main.capture_mean_brightness(FakeCap(), n_frames=3) is None
+
+
 class BackendSecurityTests:
     def test_backend_read_timeout_returns_none(self, monkeypatch):
         import sys

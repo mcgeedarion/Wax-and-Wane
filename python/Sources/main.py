@@ -568,20 +568,31 @@ class RuntimeGuard:
 
 
 
-def capture_mean_brightness(cap, n_frames: int = 3) -> float:
-    """Average luma across n_frames. No inter-frame sleep — callers throttle
-    via poll_interval_sec instead."""
+def capture_mean_brightness(cap, n_frames: int = 3) -> Optional[float]:
+    """Average luma across n_frames.
+
+    Returns None if no valid frames could be captured.
+    No inter-frame sleep — callers throttle via poll_interval_sec instead.
+    """
     import cv2
     import numpy as np
     values = []
     for _ in range(n_frames):
-        ret, frame = cap.read()
-        if not ret:
+        try:
+            ret, frame = cap.read()
+        except Exception as exc:
+            log.warning("Camera read error: %s", exc)
             continue
-        small = cv2.resize(frame, (64, 48))
-        hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
-        values.append(float(np.mean(hsv[:, :, 2]) / 255.0))
-    return float(np.mean(values)) if values else 0.5
+        if not ret or frame is None:
+            continue
+        try:
+            small = cv2.resize(frame, (64, 48))
+            hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+            values.append(float(np.mean(hsv[:, :, 2]) / 255.0))
+        except Exception as exc:
+            log.warning("Failed to process camera frame: %s", exc)
+            continue
+    return float(np.mean(values)) if values else None
 
 
 
@@ -652,6 +663,11 @@ def main_loop(s: Settings = DEFAULT_SETTINGS) -> None:
             guard.maybe_remind()
 
             ambient = capture_mean_brightness(cap, s.capture_frames)
+            if ambient is None:
+                log.warning("No valid camera frames captured; skipping this poll.")
+                time.sleep(s.poll_interval_sec)
+                continue
+
             new_kbd, new_scr = compute_targets(
                 history, ambient, last_keyboard, last_screen, s
             )
