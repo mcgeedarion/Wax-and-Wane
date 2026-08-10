@@ -47,6 +47,7 @@ Config file (JSON, all keys optional):
 
 import argparse
 import json
+import re  # BUG-06 fix: moved from _parse_first_unit_float hot-path to module level
 # Backend helpers are allow-listed, resolved to absolute paths, and never run through a shell.
 import subprocess  # nosec B404
 import time
@@ -57,6 +58,17 @@ from collections import deque
 from typing import Callable, Optional, List, Tuple
 import os
 import shutil
+
+# BUG-07 fix: import cv2/numpy at module level with graceful fallback so that
+# they are not re-imported on every call to capture_mean_brightness (hot path).
+try:
+    import cv2 as _cv2
+    import numpy as _np
+    _CV2_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _cv2 = None  # type: ignore[assignment]
+    _np = None  # type: ignore[assignment]
+    _CV2_AVAILABLE = False
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -135,7 +147,9 @@ def validate_settings(s: Settings) -> None:
     unit(s.ambient_dark, "ambient_dark")
     unit(s.ambient_bright, "ambient_bright")
     check(s.ambient_bright > s.ambient_dark, "ambient_bright must be greater than ambient_dark")
+    # BUG-13 fix: add upper bound for output_gamma (> 0 and <= 10)
     check(s.output_gamma > 0, "output_gamma must be > 0")
+    check(s.output_gamma <= 10.0, "output_gamma must be <= 10.0")
     unit(s.keyboard_min, "keyboard_min")
     unit(s.keyboard_max, "keyboard_max")
     check(s.keyboard_min <= s.keyboard_max, "keyboard_min must be <= keyboard_max")
@@ -168,6 +182,20 @@ def _build_settings(args: argparse.Namespace) -> Settings:
             if hasattr(s, key):
                 current = getattr(s, key)
                 if current is None:
+                    # BUG-10 fix: coerce Optional[float]/Optional[int] fields from JSON
+                    # by inspecting the type annotation rather than skipping coercion.
+                    hints = Settings.__dataclass_fields__
+                    if key in hints:
+                        ann = hints[key].type
+                        # Resolve "Optional[float]" -> float, "Optional[int]" -> int, etc.
+                        origin = getattr(ann, "__args__", None)
+                        if origin:
+                            inner = next((t for t in origin if t is not type(None)), None)
+                            if inner is not None:
+                                try:
+                                    value = inner(value)
+                                except (TypeError, ValueError):
+                                    pass
                     setattr(s, key, value)
                 elif isinstance(current, bool):
                     setattr(s, key, bool(value))
@@ -240,7 +268,9 @@ def _parse_args() -> argparse.Namespace:
                    metavar="0-1",        help="Keyboard brightness restored on exit")
     p.add_argument("--default-screen",  dest="default_screen_brightness",   type=float, default=None,
                    metavar="0-1",        help="Screen brightness restored on exit")
-    p.add_argument("--dry-run",         dest="dry_run", action="store_true", default=None,
+    # BUG-04 fix: store_const/const=True with default=None so None means "not supplied"
+    # and True means explicitly requested; _build_settings skips None values correctly.
+    p.add_argument("--dry-run",         dest="dry_run", action="store_const", const=True, default=None,
                    help="Print backend commands without changing brightness")
     p.add_argument("--restore-original-brightness", dest="restore_original_brightness", action="store_true", default=None)
     p.add_argument("--no-restore-original-brightness", dest="restore_original_brightness", action="store_false")
@@ -355,9 +385,8 @@ class BrightnessBackend:
         return self.read_parser(result.stdout)
 
 
+# BUG-06 fix: `import re` removed from here; it is now at module level above.
 def _parse_first_unit_float(text: str) -> Optional[float]:
-    import re
-
     unit_float = r"(?:0(?:\.\d+)?|1(?:\.0+)?)"
     brightness_match = re.search(rf"brightness\s+({unit_float})", text, re.IGNORECASE)
     if brightness_match:
@@ -432,7 +461,10 @@ def run_backend(backend: BrightnessBackend, value: float, label: str) -> None:
 
 
 
+# BUG-03 fix: guard against ZeroDivisionError when dark == bright.
 def normalize_ambient(ambient: float, dark: float, bright: float, gamma: float) -> float:
+    if bright == dark:
+        return 0.5 ** gamma
     linear = min(max((ambient - dark) / (bright - dark), 0.0), 1.0)
     return linear ** gamma
 
@@ -508,6 +540,9 @@ def target_for_channel(
     return target if abs(delta) > threshold else None
 
 
+# BUG-02 fix: compute_targets no longer mutates history.
+# The caller is responsible for appending ambient_now to history before calling
+# this function so that compute_targets remains a pure computation.
 def compute_targets(
     history: deque,
     ambient_now: float,
@@ -517,10 +552,13 @@ def compute_targets(
 ) -> Tuple[Optional[float], Optional[float]]:
     """
     Return (new_keyboard, new_screen) or None for each if change is below
-    threshold or that channel is left to system control. Pure – no I/O.
+    threshold or that channel is left to system control.
+
+    Pure – no I/O and does NOT mutate *history*.
+    The caller must append *ambient_now* to *history* before invoking this
+    function so that compute_targets can be tested in isolation.
     """
-    history.append(ambient_now)
-    smoothed = sum(history) / len(history) if history else 0.0
+    smoothed = sum(history) / len(history) if history else ambient_now
     calibrated = normalize_ambient(smoothed, s.ambient_dark, s.ambient_bright, s.output_gamma)
 
     channels = (
@@ -568,14 +606,15 @@ class RuntimeGuard:
 
 
 
+# BUG-07 fix: cv2/numpy are imported at module level (_cv2, _np).
+# capture_mean_brightness uses the module-level references instead of
+# re-importing on every invocation.
 def capture_mean_brightness(cap, n_frames: int = 3) -> Optional[float]:
     """Average luma across n_frames.
 
     Returns None if no valid frames could be captured.
     No inter-frame sleep — callers throttle via poll_interval_sec instead.
     """
-    import cv2
-    import numpy as np
     values = []
     for _ in range(n_frames):
         try:
@@ -586,13 +625,13 @@ def capture_mean_brightness(cap, n_frames: int = 3) -> Optional[float]:
         if not ret or frame is None:
             continue
         try:
-            small = cv2.resize(frame, (64, 48))
-            hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
-            values.append(float(np.mean(hsv[:, :, 2]) / 255.0))
+            small = _cv2.resize(frame, (64, 48))
+            hsv = _cv2.cvtColor(small, _cv2.COLOR_BGR2HSV)
+            values.append(float(_np.mean(hsv[:, :, 2]) / 255.0))
         except Exception as exc:
             log.warning("Failed to process camera frame: %s", exc)
             continue
-    return float(np.mean(values)) if values else None
+    return float(_np.mean(values)) if values else None
 
 
 
@@ -609,7 +648,9 @@ def doctor() -> None:
 
 
 def main_loop(s: Settings = DEFAULT_SETTINGS) -> None:
-    import cv2
+    if not _CV2_AVAILABLE:
+        log.error("opencv-python is required. Install with: pip install opencv-python numpy")
+        sys.exit(1)
     validate_settings(s)
     keyboard_enabled = s.keyboard_control != "system"
     screen_enabled = s.screen_control != "system"
@@ -626,7 +667,7 @@ def main_loop(s: Settings = DEFAULT_SETTINGS) -> None:
         log.error("No enabled output backends available. Install a backend or set that channel to system control.")
         sys.exit(1)
 
-    cap = cv2.VideoCapture(s.camera_index)
+    cap = _cv2.VideoCapture(s.camera_index)
     if not cap.isOpened():
         log.error(
             "Cannot open webcam. Check camera permissions in "
@@ -635,9 +676,15 @@ def main_loop(s: Settings = DEFAULT_SETTINGS) -> None:
         sys.exit(1)
 
     log.info("Camera active. Warming up auto-exposure (3 s)…")
-    for _ in range(15):
-        cap.read()
-        time.sleep(0.2)
+    # BUG-12 fix: warmup loop is now KeyboardInterrupt-safe.
+    try:
+        for _ in range(15):
+            cap.read()
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        log.info("Interrupted during warmup. Restoring defaults.")
+        cap.release()
+        return
 
     original_keyboard = keyboard_backend.current_brightness() if keyboard_backend and s.restore_original_brightness else None
     original_screen = screen_backend.current_brightness() if screen_backend and s.restore_original_brightness else None
@@ -645,14 +692,23 @@ def main_loop(s: Settings = DEFAULT_SETTINGS) -> None:
     history: deque = deque(maxlen=s.smoothing_window)
     last_keyboard = original_keyboard if original_keyboard is not None else -1.0
     last_screen   = original_screen if original_screen is not None else -1.0
-    last_write = 0.0
+    # BUG-01 fix: use per-channel last_write timestamps so that a keyboard
+    # write no longer suppresses a pending screen write (and vice versa).
+    last_write_keyboard = 0.0
+    last_write_screen = 0.0
     guard = RuntimeGuard(s)
 
-    def restore_defaults() -> None:
+    # BUG-08 fix: use default-argument binding to capture original_keyboard /
+    # original_screen by value at definition time, preventing late-binding bugs
+    # if those names were ever rebound later inside the enclosing scope.
+    def restore_defaults(
+        _kbd=original_keyboard,
+        _scr=original_screen,
+    ) -> None:
         if keyboard_backend and s.keyboard_control != "system":
-            run_backend(keyboard_backend, original_keyboard if original_keyboard is not None else s.default_keyboard_brightness, "keyboard brightness")
+            run_backend(keyboard_backend, _kbd if _kbd is not None else s.default_keyboard_brightness, "keyboard brightness")
         if screen_backend and s.screen_control != "system":
-            run_backend(screen_backend, original_screen if original_screen is not None else s.default_screen_brightness, "screen brightness")
+            run_backend(screen_backend, _scr if _scr is not None else s.default_screen_brightness, "screen brightness")
 
     log.info("Ambient loop started. Ctrl+C to stop.")
     try:
@@ -668,20 +724,26 @@ def main_loop(s: Settings = DEFAULT_SETTINGS) -> None:
                 time.sleep(s.poll_interval_sec)
                 continue
 
+            # BUG-02 fix: append to history in the caller (here), not inside
+            # compute_targets, so that the function stays pure / side-effect-free.
+            history.append(ambient)
             new_kbd, new_scr = compute_targets(
                 history, ambient, last_keyboard, last_screen, s
             )
 
-            may_write = (time.monotonic() - last_write) >= s.min_update_interval_sec
-            if may_write and new_kbd is not None and keyboard_backend:
-                run_backend(keyboard_backend, new_kbd, "keyboard brightness")
-                last_keyboard = new_kbd
-                last_write = time.monotonic()
+            now = time.monotonic()
+            # BUG-01 fix: independent per-channel rate-limiting.
+            if new_kbd is not None and keyboard_backend:
+                if (now - last_write_keyboard) >= s.min_update_interval_sec:
+                    run_backend(keyboard_backend, new_kbd, "keyboard brightness")
+                    last_keyboard = new_kbd
+                    last_write_keyboard = time.monotonic()
 
-            if may_write and new_scr is not None and screen_backend:
-                run_backend(screen_backend, new_scr, "screen brightness")
-                last_screen = new_scr
-                last_write = time.monotonic()
+            if new_scr is not None and screen_backend:
+                if (now - last_write_screen) >= s.min_update_interval_sec:
+                    run_backend(screen_backend, new_scr, "screen brightness")
+                    last_screen = new_scr
+                    last_write_screen = time.monotonic()
 
             smoothed = sum(history) / len(history) if history else ambient
             calibrated = normalize_ambient(smoothed, s.ambient_dark, s.ambient_bright, s.output_gamma)
@@ -702,7 +764,12 @@ def main_loop(s: Settings = DEFAULT_SETTINGS) -> None:
         cap.release()
 
 
+# BUG-11 fix: document the public aliases so downstream callers know they are
+# intentional and stable entry points rather than internal implementation details.
+#: Alias for :func:`map_ambient` – provided for backwards compatibility.
 _map_value = map_ambient
+#: Alias for :func:`main_loop` – convenience entry-point used by the Makefile
+#: and external launchers.
 run = main_loop
 
 
