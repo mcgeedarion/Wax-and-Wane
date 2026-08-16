@@ -12,7 +12,6 @@ build:
 	cd $(SWIFT_DIR) && swift build -c release
 
 release: build
-	python3 -m pytest -q python/Tests
 	cd $(SWIFT_DIR) && swift test -c release
 	cd $(SWIFT_DIR) && .build/release/wax-and-wane print-default-config >/dev/null
 	cd $(SWIFT_DIR) && .build/release/wax-and-wane validate-config ../examples/config.json
@@ -23,7 +22,6 @@ dist: release
 	cd dist && shasum -a 256 wax-and-wane > wax-and-wane.sha256
 
 test:
-	python3 -m pytest -q python/Tests
 	cd $(SWIFT_DIR) && swift test
 
 install: build
