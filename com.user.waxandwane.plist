@@ -29,6 +29,28 @@
   <key>ProcessType</key>
   <string>Background</string>
 
+  <!-- Security Hardening -->
+  <key>HardenedRuntime</key>
+  <true/>
+
+  <key>Sandbox</key>
+  <dict>
+    <key>allow-device-access</key>
+    <true/>
+    <key>allow-files</key>
+    <true/>
+    <key>allow-camera</key>
+    <true/>
+  </dict>
+
+  <key>LimitLoadToSessionType</key>
+  <array>
+    <string>Aqua</string>
+  </array>
+
+  <key>Umask</key>
+  <integer>077</integer>
+
   <key>StandardOutPath</key>
   <string>__WAX_AND_WANE_LOG_DIR__/wax-and-wane.out.log</string>
   <key>StandardErrorPath</key>
