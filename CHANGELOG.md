@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enhanced LaunchAgent security hardening (see SECURITY_AUDIT.md)
 - Stricter executable path validation in backends
 
-## [1.0.0] - 2024-01-XX
+## [1.0.0] - 2025-01-15
 
 ### Added
 - Initial release of Wax and Wane

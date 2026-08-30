@@ -8,6 +8,8 @@ struct CLI: ParsableCommand {
         subcommands: [Run.self, Doctor.self, PrintDefaultConfig.self, ValidateConfig.self],
         defaultSubcommand: Run.self
     )
+    
+    static let version = "1.0.0"
 }
 
 struct PrintDefaultConfig: ParsableCommand {
@@ -108,5 +110,10 @@ struct Run: ParsableCommand {
 }
 
 public func runWaxAndWaneCLI() {
-    CLI.main()
+    do {
+        CLI.main()
+    } catch {
+        fputs("Error: \(error.localizedDescription)\n", stderr)
+        exit(1)
+    }
 }
