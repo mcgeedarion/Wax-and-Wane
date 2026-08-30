@@ -8,7 +8,6 @@ Thank you for your interest in contributing to Wax and Wane! This document provi
 
 - **macOS** (required for testing brightness control)
 - **Swift 5.9+** (for native implementation)
-- **Python 3.10+** (for reference implementation)
 - **Homebrew** (for installing dependencies)
 
 ### Installing Dependencies
@@ -16,9 +15,6 @@ Thank you for your interest in contributing to Wax and Wane! This document provi
 ```bash
 # Install Swift dependencies
 brew install kbrightness brightness ddcctl
-
-# Install Python dependencies
-pip install opencv-python numpy pytest
 ```
 
 ### Running Tests
@@ -27,25 +23,11 @@ pip install opencv-python numpy pytest
 # Run all tests
 make test
 
-# Run Python tests only
-python -m pytest python/Tests
-
 # Run Swift tests only
 cd swift && swift test
 ```
 
 ### Code Style
-
-#### Python
-- Follow PEP 8 style guidelines
-- Use type hints for function signatures
-- Write docstrings for public functions and classes
-- Maximum line length: 100 characters
-
-```bash
-# Lint Python code
-python -m py_compile python/Sources/*.py
-```
 
 #### Swift
 - Follow Swift API Design Guidelines
@@ -58,14 +40,8 @@ python -m py_compile python/Sources/*.py
 wax-and-wane/
 ├── swift/              # Native Swift implementation (production)
 │   ├── Sources/
-│   └── Tests/
-├── python/             # Reference Python implementation
-│   ├── Sources/
-│   │   ├── settings.py    # Configuration handling
-│   │   ├── policy.py      # Brightness calculation logic
-│   │   ├── backends.py    # Hardware backend interfaces
-│   │   ├── camera.py      # Webcam capture
-│   │   └── cli.py         # CLI and main loop
+│   │   ├── WaxAndWane/      # CLI entry point
+│   │   └── WaxAndWaneCore/  # Core library with policy, backends, camera
 │   └── Tests/
 ├── .github/workflows/  # CI/CD configuration
 └── examples/           # Example configurations
@@ -126,7 +102,7 @@ wax-and-wane/
 
 ## Release Process
 
-1. Update version in `swift/Sources/wax-and-wane/main.swift`
+1. Update version in `swift/Sources/WaxAndWaneCore/CLI.swift`
 2. Update CHANGELOG.md
 3. Create release tag
 4. Build and sign binaries
