@@ -213,4 +213,16 @@ final class BackendSecurityTests: XCTestCase {
         XCTAssertFalse(result.ok)
         XCTAssertTrue(result.timedOut)
     }
+
+    func testProcessLauncherBoundsCapturedOutput() {
+        let result = ProcessLauncher().run(
+            executablePath: "/usr/bin/yes",
+            arguments: [],
+            timeout: 0.1
+        )
+
+        XCTAssertTrue(result.timedOut)
+        XCTAssertLessThanOrEqual(result.stdout.utf8.count, 1_048_576)
+        XCTAssertLessThanOrEqual(result.stderr.utf8.count, 1_048_576)
+    }
 }
