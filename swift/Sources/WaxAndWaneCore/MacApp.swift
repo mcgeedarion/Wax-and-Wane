@@ -46,6 +46,8 @@ final class BrightnessSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     private let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "com.waxandwane.camera", qos: .utility)
     private var _brightness: Float = 0.5
+    private var lastProcessedFrameTime: TimeInterval = 0
+    private let minimumFrameProcessingInterval: TimeInterval = 0.1
     private let lock = NSLock()
 
     var currentBrightness: Float {
@@ -88,6 +90,9 @@ final class BrightnessSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     func stop() { if session.isRunning { session.stopRunning() } }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastProcessedFrameTime >= minimumFrameProcessingInterval else { return }
+        lastProcessedFrameTime = now
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
