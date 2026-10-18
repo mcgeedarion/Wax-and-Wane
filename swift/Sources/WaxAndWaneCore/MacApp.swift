@@ -95,18 +95,14 @@ final class BrightnessSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDel
         let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
         let width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
         let stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
-        guard width > 0, height > 0, stride >= width else { return }
-        let bytes = lumaBase.assumingMemoryBound(to: UInt8.self)
-        var total: UInt64 = 0
-        for row in 0..<height {
-            let rowStart = bytes.advanced(by: row * stride)
-            for column in 0..<width {
-                total += UInt64(rowStart[column])
-            }
-        }
-        let mean = Float(total) / Float(width * height)
+        guard let normalizedMean = meanLuma(
+            base: lumaBase.assumingMemoryBound(to: UInt8.self),
+            width: width,
+            height: height,
+            bytesPerRow: stride
+        ) else { return }
         lock.lock()
-        _brightness = mean / 255.0
+        _brightness = normalizedMean
         lock.unlock()
     }
 }
@@ -142,6 +138,12 @@ func runApplication(settings: Settings) throws {
     if !keyboardEnabled && !screenEnabled {
         fputs("Error: keyboard and screen are both set to system control; nothing to adjust.\n", stderr)
         exit(1)
+    }
+    if keyboardEnabled && keyboardBackend == nil && screenEnabled && screenBackend != nil {
+        fputs("Warning: keyboard control unavailable; continuing with screen control only.\\n", stderr)
+    }
+    if screenEnabled && screenBackend == nil && keyboardEnabled && keyboardBackend != nil {
+        fputs("Warning: screen control unavailable; continuing with keyboard control only.\\n", stderr)
     }
     if (keyboardEnabled && keyboardBackend == nil) && (screenEnabled && screenBackend == nil) {
         fputs("Error: no enabled output backends available. Install a backend or set that channel to system control.\n", stderr)
@@ -184,8 +186,8 @@ func runApplication(settings: Settings) throws {
     var lastWrite = Date.distantPast
     let runtimeGuard = RuntimeGuard(s: settings)
 
-    let sigIntSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-    let sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+    let sigIntSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global(qos: .userInitiated))
+    let sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global(qos: .userInitiated))
     signal(SIGINT, SIG_IGN)
     signal(SIGTERM, SIG_IGN)
     let handleTermination: () -> Void = {
@@ -226,8 +228,8 @@ func runApplication(settings: Settings) throws {
 
         let rawSmoothed = history.isEmpty ? ambientNow : history.mean
         let calibrated = normalizeAmbient(rawSmoothed, dark: settings.ambientDark, bright: settings.ambientBright, gamma: settings.outputGamma)
-        let keyboardStatus = settings.keyboardControl == .system ? "system" : String(format: "%.0f%%", lastKeyboard * 100)
-        let screenStatus = settings.screenControl == .system ? "system" : String(format: "%.0f%%", lastScreen * 100)
+        let keyboardStatus = settings.keyboardControl == .system ? "system" : (keyboardBackend == nil ? "unavailable" : String(format: "%.0f%%", lastKeyboard * 100))
+        let screenStatus = settings.screenControl == .system ? "system" : (screenBackend == nil ? "unavailable" : String(format: "%.0f%%", lastScreen * 100))
         print(String(format: "Ambient raw %.3f calibrated %.3f → Keyboard %@ | Screen %@", rawSmoothed, calibrated, keyboardStatus, screenStatus))
         Thread.sleep(forTimeInterval: settings.pollIntervalSeconds)
     }
