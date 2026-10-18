@@ -5,7 +5,6 @@ import AVFoundation
 import CoreMedia
 import UserNotifications
 import CoreVideo
-import Accelerate
 
 func configureNotifications() {
     let center = UNUserNotificationCenter.current()
@@ -56,6 +55,8 @@ final class BrightnessSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDel
 
     func start() throws {
         session.beginConfiguration()
+        var configurationPending = true
+        defer { if configurationPending { session.commitConfiguration() } }
         session.sessionPreset = .low
 
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified) else {
@@ -76,6 +77,7 @@ final class BrightnessSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDel
         }
         session.addOutput(output)
         session.commitConfiguration()
+        configurationPending = false
 
         print("Warming up camera auto-exposure (3 s)…")
         session.startRunning()
@@ -83,7 +85,7 @@ final class BrightnessSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDel
         print("Ready.\n")
     }
 
-    func stop() { session.stopRunning() }
+    func stop() { if session.isRunning { session.stopRunning() } }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
@@ -91,12 +93,18 @@ final class BrightnessSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDel
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
         guard let lumaBase = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else { return }
         let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
+        let width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
         let stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
-        let count = height * stride
-        var floatBuf = [Float](repeating: 0, count: count)
-        vDSP_vfltu8(lumaBase.assumingMemoryBound(to: UInt8.self), 1, &floatBuf, 1, vDSP_Length(count))
-        var mean: Float = 0
-        vDSP_meanv(floatBuf, 1, &mean, vDSP_Length(count))
+        guard width > 0, height > 0, stride >= width else { return }
+        let bytes = lumaBase.assumingMemoryBound(to: UInt8.self)
+        var total: UInt64 = 0
+        for row in 0..<height {
+            let rowStart = bytes.advanced(by: row * stride)
+            for column in 0..<width {
+                total += UInt64(rowStart[column])
+            }
+        }
+        let mean = Float(total) / Float(width * height)
         lock.lock()
         _brightness = mean / 255.0
         lock.unlock()
@@ -113,10 +121,14 @@ func runDoctor() {
     screenCandidates().forEach { print("  \(backendDoctorLine($0))") }
     let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
     print("\nCamera permission: \(cameraStatus)")
+    let notificationCheck = DispatchSemaphore(value: 0)
     UNUserNotificationCenter.current().getNotificationSettings { settings in
         print("Notification permission: \(settings.authorizationStatus)")
+        notificationCheck.signal()
     }
-    Thread.sleep(forTimeInterval: 0.2)
+    if notificationCheck.wait(timeout: .now() + 2.0) == .timedOut {
+        print("Notification permission: query timed out")
+    }
 }
 
 func runApplication(settings: Settings) throws {
@@ -139,9 +151,15 @@ func runApplication(settings: Settings) throws {
     let originalKeyboard = settings.restoreOriginalBrightness ? keyboardBackend?.currentBrightness() : nil
     let originalScreen = settings.restoreOriginalBrightness ? screenBackend?.currentBrightness() : nil
 
+    let restoreLock = NSLock()
+    var restored = false
     func restoreDefaults() {
-        if settings.keyboardControl != .system { keyboardBackend?.set(originalKeyboard ?? settings.defaultKeyboardBrightness) }
-        if settings.screenControl != .system { screenBackend?.set(originalScreen ?? settings.defaultScreenBrightness) }
+        restoreLock.lock()
+        guard !restored else { restoreLock.unlock(); return }
+        restored = true
+        restoreLock.unlock()
+        if settings.keyboardControl != .system { _ = keyboardBackend?.set(originalKeyboard ?? settings.defaultKeyboardBrightness) }
+        if settings.screenControl != .system { _ = screenBackend?.set(originalScreen ?? settings.defaultScreenBrightness) }
     }
 
     let semaphore = DispatchSemaphore(value: 0)
@@ -166,15 +184,20 @@ func runApplication(settings: Settings) throws {
     var lastWrite = Date.distantPast
     let runtimeGuard = RuntimeGuard(s: settings)
 
-    let sigSrc = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+    let sigIntSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+    let sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
     signal(SIGINT, SIG_IGN)
-    sigSrc.setEventHandler {
+    signal(SIGTERM, SIG_IGN)
+    let handleTermination: () -> Void = {
         print("\nRestoring brightness…")
         restoreDefaults()
         sampler.stop()
         exit(0)
     }
-    sigSrc.resume()
+    sigIntSource.setEventHandler(handler: handleTermination)
+    sigTermSource.setEventHandler(handler: handleTermination)
+    sigIntSource.resume()
+    sigTermSource.resume()
 
     print("Ambient backlight running (camera active). Press Ctrl+C to stop.\n")
     if settings.dryRun { print("Dry-run mode: no brightness writes will be performed.\n") }
@@ -192,13 +215,11 @@ func runApplication(settings: Settings) throws {
         let (newKbd, newScr) = computeTargets(history: &history, ambientNow: ambientNow, lastKeyboard: lastKeyboard, lastScreen: lastScreen, s: settings)
         let mayWrite = Date().timeIntervalSince(lastWrite) >= settings.minUpdateIntervalSeconds
 
-        if mayWrite, let v = newKbd {
-            keyboardBackend?.set(v)
+        if mayWrite, let v = newKbd, let backend = keyboardBackend, backend.set(v) {
             lastKeyboard = v
             lastWrite = Date()
         }
-        if mayWrite, let v = newScr {
-            screenBackend?.set(v)
+        if mayWrite, let v = newScr, let backend = screenBackend, backend.set(v) {
             lastScreen = v
             lastWrite = Date()
         }
