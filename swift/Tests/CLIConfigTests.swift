@@ -60,6 +60,39 @@ final class CLIConfigTests: XCTestCase {
         XCTAssertFalse(settings.restoreOriginalBrightness)
     }
 
+
+    func testPartialConfigInheritsBuiltInDefaults() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wax-and-wane-partial-\\(UUID().uuidString).json")
+        try Data("{\"pollIntervalSeconds\": 3.5}".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let settings = try loadConfig(path: url.path)
+        XCTAssertEqual(settings.pollIntervalSeconds, 3.5)
+        XCTAssertEqual(settings.smoothingWindow, 5)
+        XCTAssertEqual(settings.screenMin, 0.2)
+    }
+
+    func testRejectsNonFiniteSettings() {
+        var settings = Settings()
+        settings.outputGamma = .infinity
+        XCTAssertThrowsError(try validateSettings(settings))
+
+        settings = Settings()
+        settings.pollIntervalSeconds = .nan
+        XCTAssertThrowsError(try validateSettings(settings))
+    }
+
+    func testNegativeInvertFlagsOverrideConfig() throws {
+        let path = try writeConfig(overrides: ["invertKeyboard": true, "invertScreen": true])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let args = ["--config", path, "--no-invert-keyboard", "--no-invert-screen"]
+        let command = try Run.parse(args)
+        let settings = try command.buildSettings(cliArguments: ["wax-and-wane", "run"] + args)
+        XCTAssertFalse(settings.invertKeyboard)
+        XCTAssertFalse(settings.invertScreen)
+    }
+
     func testRunSubcommandParsesDocumentedInvocation() throws {
         XCTAssertNoThrow(try CLI.parseAsRoot(["run", "--dry-run", "--max-runtime", "1"]))
     }
