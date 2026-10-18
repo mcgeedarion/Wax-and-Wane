@@ -63,7 +63,7 @@ final class CLIConfigTests: XCTestCase {
 
     func testPartialConfigInheritsBuiltInDefaults() throws {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("wax-and-wane-partial-\\(UUID().uuidString).json")
+            .appendingPathComponent("wax-and-wane-partial-\(UUID().uuidString).json")
         try Data("{\"pollIntervalSeconds\": 3.5}".utf8).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
 
