@@ -32,7 +32,15 @@ let package = Package(
         .executableTarget(
             name: "WaxAndWane",
             dependencies: ["WaxAndWaneCore"],
-            path: "Sources/WaxAndWane"
+            path: "Sources/WaxAndWane",
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/WaxAndWaneCore/Info.plist"
+                ], .when(platforms: [.macOS]))
+            ]
         ),
         .testTarget(
             name: "WaxAndWaneTests",
