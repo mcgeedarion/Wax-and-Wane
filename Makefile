@@ -36,10 +36,8 @@ uninstall: launchagent-uninstall
 
 launchagent-install: install
 	mkdir -p $(HOME)/Library/LaunchAgents $(HOME)/Library/Logs
-	sed -e "s#__WAX_AND_WANE_BINARY__#$(BINARY)#g" \
-	    -e "s#__WAX_AND_WANE_CONFIG__#$(CONFIG)#g" \
-	    -e "s#__WAX_AND_WANE_LOG_DIR__#$(HOME)/Library/Logs#g" \
-	    $(PLIST_TEMPLATE) > $(LAUNCH_AGENT)
+	WAX_BINARY="$(BINARY)" WAX_CONFIG="$(CONFIG)" WAX_LOG_DIR="$(HOME)/Library/Logs" \
+	WAX_TEMPLATE="$(PLIST_TEMPLATE)" WAX_OUTPUT="$(LAUNCH_AGENT)" python3 -c 'import os, plistlib; p=plistlib.load(open(os.environ["WAX_TEMPLATE"], "rb")); repl={"__WAX_AND_WANE_BINARY__":os.environ["WAX_BINARY"],"__WAX_AND_WANE_CONFIG__":os.environ["WAX_CONFIG"],"__WAX_AND_WANE_LOG_DIR__":os.environ["WAX_LOG_DIR"]}; walk=lambda x: {k:walk(v) for k,v in x.items()} if isinstance(x,dict) else [walk(v) for v in x] if isinstance(x,list) else repl.get(x,x) if isinstance(x,str) else x; p=walk(p); f=open(os.environ["WAX_OUTPUT"],"wb"); plistlib.dump(p,f,fmt=plistlib.FMT_XML,sort_keys=False); f.close()'
 	launchctl unload $(LAUNCH_AGENT) >/dev/null 2>&1 || true
 	launchctl load $(LAUNCH_AGENT)
 	@echo "Loaded $(LAUNCH_AGENT)"
