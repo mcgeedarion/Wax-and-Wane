@@ -225,6 +225,7 @@ struct BrightnessBackend {
         } else if !result.ok {
             fputs("Warning: failed to set \(kind.rawValue) brightness via \(name): \(result.stderr)\n", stderr)
         }
+        return result.ok
     }
 
     func currentBrightness() -> Float? {
