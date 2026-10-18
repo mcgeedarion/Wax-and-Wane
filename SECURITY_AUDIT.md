@@ -1,10 +1,8 @@
 # Security Review: Wax and Wane
 
-Date: 2026-06-07
+Date: 2026-10-18
 
 ## Scope
-- `python/Sources/main.py`
-- `ambient_backlight.py` compatibility launcher
 - `swift/Sources/WaxAndWaneCore/Backends.swift`
 - `swift/Sources/WaxAndWaneCore/MacApp.swift`
 - `swift/Sources/WaxAndWaneCore/Settings.swift`
@@ -13,7 +11,7 @@ Date: 2026-06-07
 ## Findings
 
 ### 1) Backend helper process hang can block the daemon (Medium) — Fixed
-The Python and Swift implementations launch local helper tools (`kbrightness`,
+The Swift implementation launches local helper tools (`kbrightness`,
 `mac-brightnessctl`, `brightness`, `ddcctl`) to read or write brightness. A
 malfunctioning, compromised, or unexpectedly interactive helper could run
 indefinitely. Because backend calls were synchronous and had no timeout, this
@@ -21,15 +19,13 @@ could stop camera-loop progress, prevent later brightness corrections, and delay
 shutdown/restore behavior.
 
 Mitigation implemented:
-- Python backend reads and writes now use a bounded subprocess timeout and log a
-  warning instead of propagating timeout exceptions.
-- Swift backend process execution now enforces the same bounded timeout,
+- - Swift backend process execution now enforces the same bounded timeout,
   terminates slow helpers, escalates to `SIGKILL` if needed, and reports timeout
   status to callers.
 - Regression tests cover slow-helper timeout behavior in both implementations.
 
 ### 2) PATH hijacking of privileged helper binaries (Previously High) — Mitigated
-Both implementations previously depended on ambient PATH lookup for helper
+The implementation previously depended on ambient PATH lookup for helper
 binaries. That can become arbitrary code execution if the program is run from a
 LaunchAgent/daemon or privileged shell with attacker-influenced PATH.
 
@@ -66,7 +62,7 @@ privileges while a helper directory is owned by an unprivileged account, helper
 resolution can again become arbitrary code execution.
 
 Mitigation implemented:
-- Python and Swift now filter the helper directory allow-list before lookup.
+- Swift filters the helper directory allow-list before lookup.
 - Helper directories must not be group- or world-writable.
 - When running elevated, helper directories must be root-owned; otherwise they
   must be owned by root or the current user.
@@ -77,3 +73,19 @@ Mitigation implemented:
   arrays, not through a shell.
 - No network-facing surface was identified in this codebase.
 - Config files are parsed as JSON into typed settings and validated before use.
+
+
+## Follow-up audit (2026-10-18)
+
+The Swift implementation is the supported implementation. Historical Python test and module references have been removed from the current scope.
+
+- SwiftPM no longer processes `Info.plist` as a resource. The executable linker embeds the camera usage description in the Mach-O `__info_plist` section.
+- Brightness writes return success/failure so control state advances only after successful writes.
+- Camera luma calculation uses actual plane width and row stride, excluding row padding and avoiding per-frame float-buffer allocation.
+- Settings validation rejects non-finite numeric values, and partial JSON configuration objects inherit built-in defaults.
+- Backend output parsing rejects unlabeled ambiguous numeric output.
+- Process stdout and stderr are drained concurrently, and waiting for inherited pipe descriptors is bounded.
+- SIGINT and SIGTERM use the same idempotent restore path.
+- The LaunchAgent no longer contains unsupported pseudo-sandbox/hardened-runtime keys. Those protections require a properly signed application and valid entitlements, not arbitrary launchd plist keys.
+
+Residual verification required: run `swift test` and `swift build -c release` on macOS, test camera permissions and actual hardware backends, and inspect the built executable's `__info_plist` section. Process group termination and strict output-size limits remain candidates for further hardening.
