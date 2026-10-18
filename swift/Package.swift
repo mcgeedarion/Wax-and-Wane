@@ -21,7 +21,6 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/WaxAndWaneCore",
-            resources: [.process("Info.plist")],
             linkerSettings: [
                 .linkedFramework("IOKit", .when(platforms: [.macOS])),
                 .linkedFramework("AVFoundation", .when(platforms: [.macOS])),
