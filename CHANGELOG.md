@@ -23,22 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added regression coverage for partial configs, non-finite settings, negative inversion flags, and ambiguous brightness output.
 
 ### Added
-- Modular Python package structure with separate modules for settings, policy, backends, camera, and CLI
-- Unit tests for settings module (`SettingsTests.py`)
-- Unit tests for backends module (`BackendTests.py`)
-- Integration tests for full workflow verification (`IntegrationTests.py`)
-- CONTRIBUTING.md with development guidelines
-- CHANGELOG.md for tracking changes
-- Version tracking in Python package (`__version__`)
+- Native Swift package with policy, settings, backend, CLI, and macOS camera modules.
+- Regression tests for configuration merging, settings validation, luma sampling, backend parsing, and process timeouts.
 
 ### Changed
-- Refactored monolithic `main.py` into modular components
-- Improved test coverage for Python implementation
-- Updated pytest configuration to support both old and new test class naming conventions
+- Configuration files may specify only the settings they override; omitted values inherit built-in defaults.
+- Camera processing samples at a bounded cadence and avoids allocating a full float buffer for every frame.
 
 ### Security
-- Enhanced LaunchAgent security hardening (see SECURITY_AUDIT.md)
-- Stricter executable path validation in backends
+- Updated LaunchAgent generation to serialize plist data safely.
+- Removed unsupported LaunchAgent keys that implied sandboxing or hardened runtime without signed-app entitlements.
 
 ## [1.0.0] - 2025-01-15
 
