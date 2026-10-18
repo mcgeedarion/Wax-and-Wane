@@ -99,18 +99,30 @@ struct ProcessLauncher {
         process.standardError = errPipe
 
         let outputLock = NSLock()
+        let maximumCapturedOutputBytes = 1_048_576
         var stdoutData = Data()
         var stderrData = Data()
+        func drain(_ handle: FileHandle) -> Data {
+            var captured = Data()
+            while true {
+                let chunk = handle.availableData
+                if chunk.isEmpty { break }
+                if captured.count < maximumCapturedOutputBytes {
+                    captured.append(chunk.prefix(maximumCapturedOutputBytes - captured.count))
+                }
+            }
+            return captured
+        }
         let readers = DispatchGroup()
         readers.enter()
         DispatchQueue.global(qos: .utility).async {
-            let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+            let data = drain(outPipe.fileHandleForReading)
             outputLock.lock(); stdoutData = data; outputLock.unlock()
             readers.leave()
         }
         readers.enter()
         DispatchQueue.global(qos: .utility).async {
-            let data = errPipe.fileHandleForReading.readDataToEndOfFile()
+            let data = drain(errPipe.fileHandleForReading)
             outputLock.lock(); stderrData = data; outputLock.unlock()
             readers.leave()
         }
