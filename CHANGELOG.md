@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Removed the unsupported SwiftPM processing of the camera usage `Info.plist`, and embedded the usage description in the executable.
+- Report brightness backend write failures to the control loop so failed writes can be retried.
+- Exclude image row padding from ambient luma averages and avoid per-frame float-buffer allocations.
+- Restore brightness on SIGTERM as well as SIGINT, with idempotent cleanup.
+- Reject non-finite settings and ambiguous unlabeled brightness parser output.
+- Bound subprocess output-pipe waits and drain stdout/stderr concurrently.
+- Merge partial JSON config files over built-in defaults.
+- Add explicit negative inversion flags for CLI overrides.
+- Generate LaunchAgent plist files with a plist-aware serializer and remove unsupported pseudo-sandbox keys.
+- Update security documentation to reflect the Swift implementation.
+
+### Testing
+- Added regression coverage for partial configs, non-finite settings, negative inversion flags, and ambiguous brightness output.
+
 ### Added
 - Modular Python package structure with separate modules for settings, policy, backends, camera, and CLI
 - Unit tests for settings module (`SettingsTests.py`)
