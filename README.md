@@ -13,7 +13,8 @@ The Swift binary uses AVFoundation natively, integrates with Notification Center
 ## What's improved
 
 - **Config-first workflow**: generate a full JSON template with `wax-and-wane print-default-config`; see `examples/config.json`.
-- **Strict validation**: brightness ranges, timing values, calibration bounds, and mode names are checked before the camera starts.
+- **Strict validation**: brightness ranges, finite timing values, calibration bounds, and mode names are checked before the camera starts.
+- **Partial configuration**: supplied JSON keys override built-in defaults; omitted keys retain their defaults.
 - **Original-brightness restore**: supported backends are queried at startup and restored on exit; configured defaults remain the fallback.
 - **Calibration and hysteresis**: ambient samples can be normalized with dark/bright calibration points, gamma, separate rise/fall thresholds, and a minimum write interval.
 - **Backend selection and diagnostics**: choose helpers with `--keyboard-backend` / `--screen-backend`, and run `wax-and-wane doctor` for setup checks.
@@ -37,7 +38,8 @@ The Swift binary uses AVFoundation natively, integrates with Notification Center
 - **Trusted CWD**: subprocesses are launched from `$HOME`.
 - **No shell expansion**: commands are passed as argument arrays, never through a shell.
 - **Bounded helper execution**: backend helper reads/writes time out instead of blocking the camera loop indefinitely.
-- **Camera privacy**: startup notification, periodic reminders, dry-run mode, and optional auto-stop.
+- **Camera privacy**: startup notification, periodic reminders, dry-run mode, optional auto-stop, and a camera usage description embedded in the executable.
+- **LaunchAgent security**: the plist configures launchd behavior only. It does not itself enable App Sandbox or Hardened Runtime, which require a correctly signed app and entitlements.
 
 ## Requirements
 
