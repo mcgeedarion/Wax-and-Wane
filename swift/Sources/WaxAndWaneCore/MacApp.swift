@@ -140,10 +140,10 @@ func runApplication(settings: Settings) throws {
         exit(1)
     }
     if keyboardEnabled && keyboardBackend == nil && screenEnabled && screenBackend != nil {
-        fputs("Warning: keyboard control unavailable; continuing with screen control only.\\n", stderr)
+        fputs("Warning: keyboard control unavailable; continuing with screen control only.\n", stderr)
     }
     if screenEnabled && screenBackend == nil && keyboardEnabled && keyboardBackend != nil {
-        fputs("Warning: screen control unavailable; continuing with keyboard control only.\\n", stderr)
+        fputs("Warning: screen control unavailable; continuing with keyboard control only.\n", stderr)
     }
     if (keyboardEnabled && keyboardBackend == nil) && (screenEnabled && screenBackend == nil) {
         fputs("Error: no enabled output backends available. Install a backend or set that channel to system control.\n", stderr)
