@@ -1,6 +1,24 @@
 import XCTest
 @testable import WaxAndWaneCore
 
+final class LumaMeanTests: XCTestCase {
+    func testMeanIgnoresPaddingBytes() {
+        let bytes: [UInt8] = [10, 20, 255, 255, 30, 40, 255, 255]
+        let mean = bytes.withUnsafeBufferPointer { buffer in
+            meanLuma(base: buffer.baseAddress!, width: 2, height: 2, bytesPerRow: 4)
+        }
+        XCTAssertEqual(mean ?? -1, 25.0 / 255.0, accuracy: 1e-5)
+    }
+
+    func testRejectsInvalidLumaGeometry() {
+        let bytes: [UInt8] = [1, 2, 3, 4]
+        let mean = bytes.withUnsafeBufferPointer { buffer in
+            meanLuma(base: buffer.baseAddress!, width: 3, height: 1, bytesPerRow: 2)
+        }
+        XCTAssertNil(mean)
+    }
+}
+
 final class MapAmbientTests: XCTestCase {
     func testNoInvertMin() {
         XCTAssertEqual(mapAmbient(0.0, minValue: 0.2, maxValue: 1.0, invert: false), 0.2, accuracy: 1e-5)
