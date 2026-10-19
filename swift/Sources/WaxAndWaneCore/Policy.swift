@@ -2,6 +2,18 @@ import Foundation
 
 func clampUnit(_ value: Float) -> Float { min(max(value, 0.0), 1.0) }
 
+func meanLuma(base: UnsafePointer<UInt8>, width: Int, height: Int, bytesPerRow: Int) -> Float? {
+    guard width > 0, height > 0, bytesPerRow >= width else { return nil }
+    var total: UInt64 = 0
+    for row in 0..<height {
+        let rowStart = base.advanced(by: row * bytesPerRow)
+        for column in 0..<width {
+            total += UInt64(rowStart[column])
+        }
+    }
+    return Float(total) / (Float(width) * Float(height) * 255.0)
+}
+
 func normalizeAmbient(_ ambient: Float, dark: Float, bright: Float, gamma: Float) -> Float {
     let linear = clampUnit((ambient - dark) / (bright - dark))
     return pow(linear, gamma)

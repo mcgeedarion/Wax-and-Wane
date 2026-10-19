@@ -98,32 +98,72 @@ struct ProcessLauncher {
         process.standardOutput = outPipe
         process.standardError = errPipe
 
-        func collect(ok: Bool, timedOut: Bool, fallbackError: String = "") -> ProcessResult {
-            let stdout = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let stderrData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            let stderr = String(data: stderrData, encoding: .utf8) ?? fallbackError
-            return ProcessResult(ok: ok, stdout: stdout, stderr: stderr.isEmpty ? fallbackError : stderr, timedOut: timedOut)
+        let outputLock = NSLock()
+        let maximumCapturedOutputBytes = 1_048_576
+        var stdoutData = Data()
+        var stderrData = Data()
+        func drain(_ handle: FileHandle) -> Data {
+            var captured = Data()
+            while true {
+                let chunk = handle.availableData
+                if chunk.isEmpty { break }
+                if captured.count < maximumCapturedOutputBytes {
+                    captured.append(chunk.prefix(maximumCapturedOutputBytes - captured.count))
+                }
+            }
+            return captured
+        }
+        let readers = DispatchGroup()
+        readers.enter()
+        DispatchQueue.global(qos: .utility).async {
+            let data = drain(outPipe.fileHandleForReading)
+            outputLock.lock(); stdoutData = data; outputLock.unlock()
+            readers.leave()
+        }
+        readers.enter()
+        DispatchQueue.global(qos: .utility).async {
+            let data = drain(errPipe.fileHandleForReading)
+            outputLock.lock(); stderrData = data; outputLock.unlock()
+            readers.leave()
         }
 
         do {
             try process.run()
+            outPipe.fileHandleForWriting.closeFile()
+            errPipe.fileHandleForWriting.closeFile()
             let completed = DispatchSemaphore(value: 0)
             DispatchQueue.global(qos: .utility).async {
                 process.waitUntilExit()
                 completed.signal()
             }
 
-            if completed.wait(timeout: .now() + timeout) == .timedOut {
+            if completed.wait(timeout: .now() + max(0.01, timeout)) == .timedOut {
                 process.terminate()
-                if completed.wait(timeout: .now() + 1.0) == .timedOut {
+                if completed.wait(timeout: .now() + 0.5) == .timedOut {
                     kill(process.processIdentifier, SIGKILL)
-                    _ = completed.wait(timeout: .now() + 1.0)
+                    _ = completed.wait(timeout: .now() + 0.5)
                 }
-                return collect(ok: false, timedOut: true, fallbackError: "timed out after \(timeout)s")
+                if readers.wait(timeout: .now() + 0.5) == .success {
+                    outputLock.lock()
+                    let out = String(data: stdoutData, encoding: .utf8) ?? ""
+                    let err = String(data: stderrData, encoding: .utf8) ?? ""
+                    outputLock.unlock()
+                    return ProcessResult(ok: false, stdout: out, stderr: err.isEmpty ? "timed out after \(timeout)s" : err, timedOut: true)
+                }
+                return ProcessResult(ok: false, stdout: "", stderr: "timed out after \(timeout)s; output pipes did not close", timedOut: true)
             }
 
-            return collect(ok: process.terminationStatus == 0, timedOut: false)
+            guard readers.wait(timeout: .now() + 0.5) == .success else {
+                return ProcessResult(ok: false, stdout: "", stderr: "helper exited but output pipes did not close", timedOut: true)
+            }
+            outputLock.lock()
+            let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+            let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+            outputLock.unlock()
+            return ProcessResult(ok: process.terminationStatus == 0, stdout: stdout, stderr: stderr, timedOut: false)
         } catch {
+            outPipe.fileHandleForReading.closeFile()
+            errPipe.fileHandleForReading.closeFile()
             return ProcessResult(ok: false, stdout: "", stderr: error.localizedDescription, timedOut: false)
         }
     }
@@ -167,10 +207,7 @@ func parseFirstUnitFloat(_ text: String) -> Float? {
         return Float(text[range])
     }
 
-    guard let regex = try? NSRegularExpression(pattern: unitPattern) else { return nil }
-    let matches = regex.matches(in: text, range: fullRange)
-    guard let match = matches.last, let range = Range(match.range, in: text) else { return nil }
-    return Float(text[range])
+    return nil
 }
 
 struct BrightnessBackend {
@@ -186,12 +223,13 @@ struct BrightnessBackend {
 
     func clamped(_ value: Float) -> Float { min(max(value, outMin), outMax) }
 
-    func set(_ value: Float) {
+    @discardableResult
+    func set(_ value: Float) -> Bool {
         let v = clamped(value)
         let args = commandBuilder(v)
         if dryRun {
             print("[dry-run] \(executablePath) \(args.joined(separator: " "))")
-            return
+            return true
         }
         let result = launcher.run(executablePath: executablePath, arguments: args)
         if result.timedOut {
@@ -199,6 +237,7 @@ struct BrightnessBackend {
         } else if !result.ok {
             fputs("Warning: failed to set \(kind.rawValue) brightness via \(name): \(result.stderr)\n", stderr)
         }
+        return result.ok
     }
 
     func currentBrightness() -> Float? {

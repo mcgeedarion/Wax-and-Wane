@@ -29,20 +29,6 @@
   <key>ProcessType</key>
   <string>Background</string>
 
-  <!-- Security Hardening -->
-  <key>HardenedRuntime</key>
-  <true/>
-
-  <key>Sandbox</key>
-  <dict>
-    <key>allow-device-access</key>
-    <true/>
-    <key>allow-files</key>
-    <true/>
-    <key>allow-camera</key>
-    <true/>
-  </dict>
-
   <key>LimitLoadToSessionType</key>
   <array>
     <string>Aqua</string>

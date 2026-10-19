@@ -21,7 +21,6 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/WaxAndWaneCore",
-            resources: [.process("Info.plist")],
             linkerSettings: [
                 .linkedFramework("IOKit", .when(platforms: [.macOS])),
                 .linkedFramework("AVFoundation", .when(platforms: [.macOS])),
@@ -33,7 +32,15 @@ let package = Package(
         .executableTarget(
             name: "WaxAndWane",
             dependencies: ["WaxAndWaneCore"],
-            path: "Sources/WaxAndWane"
+            path: "Sources/WaxAndWane",
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "../packaging/Info.plist"
+                ], .when(platforms: [.macOS]))
+            ]
         ),
         .testTarget(
             name: "WaxAndWaneTests",

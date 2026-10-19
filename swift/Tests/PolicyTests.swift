@@ -1,6 +1,24 @@
 import XCTest
 @testable import WaxAndWaneCore
 
+final class LumaMeanTests: XCTestCase {
+    func testMeanIgnoresPaddingBytes() {
+        let bytes: [UInt8] = [10, 20, 255, 255, 30, 40, 255, 255]
+        let mean = bytes.withUnsafeBufferPointer { buffer in
+            meanLuma(base: buffer.baseAddress!, width: 2, height: 2, bytesPerRow: 4)
+        }
+        XCTAssertEqual(mean ?? -1, 25.0 / 255.0, accuracy: 1e-5)
+    }
+
+    func testRejectsInvalidLumaGeometry() {
+        let bytes: [UInt8] = [1, 2, 3, 4]
+        let mean = bytes.withUnsafeBufferPointer { buffer in
+            meanLuma(base: buffer.baseAddress!, width: 3, height: 1, bytesPerRow: 2)
+        }
+        XCTAssertNil(mean)
+    }
+}
+
 final class MapAmbientTests: XCTestCase {
     func testNoInvertMin() {
         XCTAssertEqual(mapAmbient(0.0, minValue: 0.2, maxValue: 1.0, invert: false), 0.2, accuracy: 1e-5)
@@ -164,8 +182,12 @@ final class BrightnessParserTests: XCTestCase {
         XCTAssertEqual(parseFirstUnitFloat(output) ?? -1, 0.375, accuracy: 1e-5)
     }
 
-    func testFallsBackToLastUnitFloat() {
-        XCTAssertEqual(parseFirstUnitFloat("display 1 value 0.625") ?? -1, 0.625, accuracy: 1e-5)
+    func testRejectsUnlabeledAmbiguousNumbers() {
+        XCTAssertNil(parseFirstUnitFloat("display 1 value 0.625"))
+    }
+
+    func testRejectsOutputWithoutBrightnessField() {
+        XCTAssertNil(parseFirstUnitFloat("display 1: main, active"))
     }
 }
 
@@ -190,5 +212,17 @@ final class BackendSecurityTests: XCTestCase {
 
         XCTAssertFalse(result.ok)
         XCTAssertTrue(result.timedOut)
+    }
+
+    func testProcessLauncherBoundsCapturedOutput() {
+        let result = ProcessLauncher().run(
+            executablePath: "/usr/bin/yes",
+            arguments: [],
+            timeout: 0.1
+        )
+
+        XCTAssertTrue(result.timedOut)
+        XCTAssertLessThanOrEqual(result.stdout.utf8.count, 1_048_576)
+        XCTAssertLessThanOrEqual(result.stderr.utf8.count, 1_048_576)
     }
 }

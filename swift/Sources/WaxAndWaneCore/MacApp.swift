@@ -5,7 +5,6 @@ import AVFoundation
 import CoreMedia
 import UserNotifications
 import CoreVideo
-import Accelerate
 
 func configureNotifications() {
     let center = UNUserNotificationCenter.current()
@@ -47,6 +46,8 @@ final class BrightnessSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDel
     private let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "com.waxandwane.camera", qos: .utility)
     private var _brightness: Float = 0.5
+    private var lastProcessedFrameTime: TimeInterval = 0
+    private let minimumFrameProcessingInterval: TimeInterval = 0.1
     private let lock = NSLock()
 
     var currentBrightness: Float {
@@ -56,6 +57,8 @@ final class BrightnessSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDel
 
     func start() throws {
         session.beginConfiguration()
+        var configurationPending = true
+        defer { if configurationPending { session.commitConfiguration() } }
         session.sessionPreset = .low
 
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .unspecified) else {
@@ -76,6 +79,7 @@ final class BrightnessSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDel
         }
         session.addOutput(output)
         session.commitConfiguration()
+        configurationPending = false
 
         print("Warming up camera auto-exposure (3 s)…")
         session.startRunning()
@@ -83,22 +87,27 @@ final class BrightnessSampler: NSObject, AVCaptureVideoDataOutputSampleBufferDel
         print("Ready.\n")
     }
 
-    func stop() { session.stopRunning() }
+    func stop() { if session.isRunning { session.stopRunning() } }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastProcessedFrameTime >= minimumFrameProcessingInterval else { return }
+        lastProcessedFrameTime = now
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
         guard let lumaBase = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else { return }
         let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
+        let width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
         let stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
-        let count = height * stride
-        var floatBuf = [Float](repeating: 0, count: count)
-        vDSP_vfltu8(lumaBase.assumingMemoryBound(to: UInt8.self), 1, &floatBuf, 1, vDSP_Length(count))
-        var mean: Float = 0
-        vDSP_meanv(floatBuf, 1, &mean, vDSP_Length(count))
+        guard let normalizedMean = meanLuma(
+            base: lumaBase.assumingMemoryBound(to: UInt8.self),
+            width: width,
+            height: height,
+            bytesPerRow: stride
+        ) else { return }
         lock.lock()
-        _brightness = mean / 255.0
+        _brightness = normalizedMean
         lock.unlock()
     }
 }
@@ -113,10 +122,14 @@ func runDoctor() {
     screenCandidates().forEach { print("  \(backendDoctorLine($0))") }
     let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
     print("\nCamera permission: \(cameraStatus)")
+    let notificationCheck = DispatchSemaphore(value: 0)
     UNUserNotificationCenter.current().getNotificationSettings { settings in
         print("Notification permission: \(settings.authorizationStatus)")
+        notificationCheck.signal()
     }
-    Thread.sleep(forTimeInterval: 0.2)
+    if notificationCheck.wait(timeout: .now() + 2.0) == .timedOut {
+        print("Notification permission: query timed out")
+    }
 }
 
 func runApplication(settings: Settings) throws {
@@ -131,6 +144,12 @@ func runApplication(settings: Settings) throws {
         fputs("Error: keyboard and screen are both set to system control; nothing to adjust.\n", stderr)
         exit(1)
     }
+    if keyboardEnabled && keyboardBackend == nil && screenEnabled && screenBackend != nil {
+        fputs("Warning: keyboard control unavailable; continuing with screen control only.\n", stderr)
+    }
+    if screenEnabled && screenBackend == nil && keyboardEnabled && keyboardBackend != nil {
+        fputs("Warning: screen control unavailable; continuing with keyboard control only.\n", stderr)
+    }
     if (keyboardEnabled && keyboardBackend == nil) && (screenEnabled && screenBackend == nil) {
         fputs("Error: no enabled output backends available. Install a backend or set that channel to system control.\n", stderr)
         exit(1)
@@ -139,9 +158,15 @@ func runApplication(settings: Settings) throws {
     let originalKeyboard = settings.restoreOriginalBrightness ? keyboardBackend?.currentBrightness() : nil
     let originalScreen = settings.restoreOriginalBrightness ? screenBackend?.currentBrightness() : nil
 
+    let restoreLock = NSLock()
+    var restored = false
     func restoreDefaults() {
-        if settings.keyboardControl != .system { keyboardBackend?.set(originalKeyboard ?? settings.defaultKeyboardBrightness) }
-        if settings.screenControl != .system { screenBackend?.set(originalScreen ?? settings.defaultScreenBrightness) }
+        restoreLock.lock()
+        guard !restored else { restoreLock.unlock(); return }
+        restored = true
+        restoreLock.unlock()
+        if settings.keyboardControl != .system { _ = keyboardBackend?.set(originalKeyboard ?? settings.defaultKeyboardBrightness) }
+        if settings.screenControl != .system { _ = screenBackend?.set(originalScreen ?? settings.defaultScreenBrightness) }
     }
 
     let semaphore = DispatchSemaphore(value: 0)
@@ -166,15 +191,20 @@ func runApplication(settings: Settings) throws {
     var lastWrite = Date.distantPast
     let runtimeGuard = RuntimeGuard(s: settings)
 
-    let sigSrc = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+    let sigIntSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global(qos: .userInitiated))
+    let sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global(qos: .userInitiated))
     signal(SIGINT, SIG_IGN)
-    sigSrc.setEventHandler {
+    signal(SIGTERM, SIG_IGN)
+    let handleTermination: () -> Void = {
         print("\nRestoring brightness…")
         restoreDefaults()
         sampler.stop()
         exit(0)
     }
-    sigSrc.resume()
+    sigIntSource.setEventHandler(handler: handleTermination)
+    sigTermSource.setEventHandler(handler: handleTermination)
+    sigIntSource.resume()
+    sigTermSource.resume()
 
     print("Ambient backlight running (camera active). Press Ctrl+C to stop.\n")
     if settings.dryRun { print("Dry-run mode: no brightness writes will be performed.\n") }
@@ -192,21 +222,19 @@ func runApplication(settings: Settings) throws {
         let (newKbd, newScr) = computeTargets(history: &history, ambientNow: ambientNow, lastKeyboard: lastKeyboard, lastScreen: lastScreen, s: settings)
         let mayWrite = Date().timeIntervalSince(lastWrite) >= settings.minUpdateIntervalSeconds
 
-        if mayWrite, let v = newKbd {
-            keyboardBackend?.set(v)
+        if mayWrite, let v = newKbd, let backend = keyboardBackend, backend.set(v) {
             lastKeyboard = v
             lastWrite = Date()
         }
-        if mayWrite, let v = newScr {
-            screenBackend?.set(v)
+        if mayWrite, let v = newScr, let backend = screenBackend, backend.set(v) {
             lastScreen = v
             lastWrite = Date()
         }
 
         let rawSmoothed = history.isEmpty ? ambientNow : history.mean
         let calibrated = normalizeAmbient(rawSmoothed, dark: settings.ambientDark, bright: settings.ambientBright, gamma: settings.outputGamma)
-        let keyboardStatus = settings.keyboardControl == .system ? "system" : String(format: "%.0f%%", lastKeyboard * 100)
-        let screenStatus = settings.screenControl == .system ? "system" : String(format: "%.0f%%", lastScreen * 100)
+        let keyboardStatus = settings.keyboardControl == .system ? "system" : (keyboardBackend == nil ? "unavailable" : String(format: "%.0f%%", lastKeyboard * 100))
+        let screenStatus = settings.screenControl == .system ? "system" : (screenBackend == nil ? "unavailable" : String(format: "%.0f%%", lastScreen * 100))
         print(String(format: "Ambient raw %.3f calibrated %.3f → Keyboard %@ | Screen %@", rawSmoothed, calibrated, keyboardStatus, screenStatus))
         Thread.sleep(forTimeInterval: settings.pollIntervalSeconds)
     }

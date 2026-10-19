@@ -50,12 +50,14 @@ struct Run: ParsableCommand {
     @Option(name: .long, help: "Keyboard brightness lower bound [0-1]") var keyboardMin: Float? = nil
     @Option(name: .long, help: "Keyboard brightness upper bound [0-1]") var keyboardMax: Float? = nil
     @Flag(name: .long, help: "Invert keyboard mapping (bright→dark)") var invertKeyboard: Bool = false
+    @Flag(name: .customLong("no-invert-keyboard"), help: "Disable keyboard mapping inversion") var noInvertKeyboard: Bool = false
     @Option(name: .long, help: "Keyboard mode: ambient auto, fixed manual, or leave to system") var keyboardControl: BrightnessControl? = nil
     @Option(name: .long, help: "Preferred keyboard backend name") var keyboardBackend: String? = nil
     @Option(name: .long, help: "Fixed keyboard brightness when --keyboard-control manual [0-1]") var manualKeyboard: Float? = nil
     @Option(name: .long, help: "Screen brightness lower bound [0-1]") var screenMin: Float? = nil
     @Option(name: .long, help: "Screen brightness upper bound [0-1]") var screenMax: Float? = nil
     @Flag(name: .long, help: "Invert screen mapping") var invertScreen: Bool = false
+    @Flag(name: .customLong("no-invert-screen"), help: "Disable screen mapping inversion") var noInvertScreen: Bool = false
     @Option(name: .long, help: "Screen mode: ambient auto, fixed manual, or leave to system") var screenControl: BrightnessControl? = nil
     @Option(name: .long, help: "Preferred screen backend name") var screenBackend: String? = nil
     @Option(name: .long, help: "Fixed screen brightness when --screen-control manual [0-1]") var manualScreen: Float? = nil
@@ -93,8 +95,10 @@ struct Run: ParsableCommand {
         if let v = defaultKeyboard { s.defaultKeyboardBrightness = v }
         if let v = defaultScreen { s.defaultScreenBrightness = v }
         if let v = maxRuntime { s.maxCameraRuntimeSeconds = v }
-        if cliHasLongFlag("--invert-keyboard", in: cliArguments) { s.invertKeyboard = invertKeyboard }
-        if cliHasLongFlag("--invert-screen", in: cliArguments) { s.invertScreen = invertScreen }
+        if cliHasLongFlag("--invert-keyboard", in: cliArguments) { s.invertKeyboard = true }
+        if cliHasLongFlag("--no-invert-keyboard", in: cliArguments) { s.invertKeyboard = false }
+        if cliHasLongFlag("--invert-screen", in: cliArguments) { s.invertScreen = true }
+        if cliHasLongFlag("--no-invert-screen", in: cliArguments) { s.invertScreen = false }
         if cliHasLongFlag("--dry-run", in: cliArguments) { s.dryRun = dryRun }
         if cliHasLongFlag("--no-restore-original-brightness", in: cliArguments) {
             s.restoreOriginalBrightness = !noRestoreOriginalBrightness

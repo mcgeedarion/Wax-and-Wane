@@ -55,7 +55,17 @@ enum SettingsError: Error, CustomStringConvertible {
 func loadConfig(path: String) throws -> Settings {
     let url = URL(fileURLWithPath: path)
     let data = try Data(contentsOf: url)
-    return try JSONDecoder().decode(Settings.self, from: data)
+    let supplied = try JSONSerialization.jsonObject(with: data)
+    guard let overrides = supplied as? [String: Any] else {
+        throw SettingsError.invalid("Configuration root must be a JSON object")
+    }
+    let defaultsData = try JSONEncoder().encode(Settings())
+    guard var merged = try JSONSerialization.jsonObject(with: defaultsData) as? [String: Any] else {
+        throw SettingsError.invalid("Could not construct default configuration")
+    }
+    for (key, value) in overrides { merged[key] = value }
+    let mergedData = try JSONSerialization.data(withJSONObject: merged, options: [.fragmentsAllowed])
+    return try JSONDecoder().decode(Settings.self, from: mergedData)
 }
 
 func defaultConfigJSON() throws -> String {
@@ -69,16 +79,26 @@ func validateSettings(_ s: Settings) throws {
     func check(_ condition: Bool, _ message: String) throws {
         if !condition { throw SettingsError.invalid(message) }
     }
+    func finite(_ value: Float, _ name: String) throws {
+        try check(value.isFinite, "\(name) must be finite")
+    }
+    func finite(_ value: TimeInterval, _ name: String) throws {
+        try check(value.isFinite, "\(name) must be finite")
+    }
     func unit(_ value: Float, _ name: String) throws {
+        try finite(value, name)
         try check(value >= 0.0 && value <= 1.0, "\(name) must be in [0, 1]")
     }
     func nonNegative(_ value: TimeInterval, _ name: String) throws {
+        try finite(value, name)
         try check(value >= 0.0, "\(name) must be >= 0")
     }
     func nonNegativeFloat(_ value: Float, _ name: String) throws {
+        try finite(value, name)
         try check(value >= 0.0, "\(name) must be >= 0")
     }
 
+    try finite(s.pollIntervalSeconds, "pollIntervalSeconds")
     try check(s.pollIntervalSeconds > 0, "pollIntervalSeconds must be > 0")
     try check(s.smoothingWindow > 0, "smoothingWindow must be > 0")
     try nonNegativeFloat(s.changeThreshold, "changeThreshold")
@@ -88,6 +108,7 @@ func validateSettings(_ s: Settings) throws {
     try unit(s.ambientDark, "ambientDark")
     try unit(s.ambientBright, "ambientBright")
     try check(s.ambientBright > s.ambientDark, "ambientBright must be greater than ambientDark")
+    try finite(s.outputGamma, "outputGamma")
     try check(s.outputGamma > 0, "outputGamma must be > 0")
 
     try unit(s.keyboardMin, "keyboardMin")
