@@ -12,6 +12,7 @@ build:
 	cd $(SWIFT_DIR) && swift build -c release
 
 release: build
+	python3 -m unittest discover -s packaging -p 'test_*.py'
 	cd $(SWIFT_DIR) && swift test -c release
 	cd $(SWIFT_DIR) && .build/release/wax-and-wane print-default-config >/dev/null
 	cd $(SWIFT_DIR) && .build/release/wax-and-wane validate-config ../examples/config.json
@@ -22,6 +23,7 @@ dist: release
 	cd dist && shasum -a 256 wax-and-wane > wax-and-wane.sha256
 
 test:
+	python3 -m unittest discover -s packaging -p 'test_*.py'
 	cd $(SWIFT_DIR) && swift test
 
 install: build
@@ -37,7 +39,7 @@ uninstall: launchagent-uninstall
 launchagent-install: install
 	mkdir -p $(HOME)/Library/LaunchAgents $(HOME)/Library/Logs
 	WAX_BINARY="$(BINARY)" WAX_CONFIG="$(CONFIG)" WAX_LOG_DIR="$(HOME)/Library/Logs" \
-	WAX_TEMPLATE="$(PLIST_TEMPLATE)" WAX_OUTPUT="$(LAUNCH_AGENT)" python3 -c 'import os, plistlib; p=plistlib.load(open(os.environ["WAX_TEMPLATE"], "rb")); repl={"__WAX_AND_WANE_BINARY__":os.environ["WAX_BINARY"],"__WAX_AND_WANE_CONFIG__":os.environ["WAX_CONFIG"],"__WAX_AND_WANE_LOG_DIR__":os.environ["WAX_LOG_DIR"]}; walk=lambda x: {k:walk(v) for k,v in x.items()} if isinstance(x,dict) else [walk(v) for v in x] if isinstance(x,list) else repl.get(x,x) if isinstance(x,str) else x; p=walk(p); f=open(os.environ["WAX_OUTPUT"],"wb"); plistlib.dump(p,f,fmt=plistlib.FMT_XML,sort_keys=False); f.close()'
+	WAX_TEMPLATE="$(PLIST_TEMPLATE)" WAX_OUTPUT="$(LAUNCH_AGENT)" python3 packaging/render_launchagent.py
 	launchctl unload $(LAUNCH_AGENT) >/dev/null 2>&1 || true
 	launchctl load $(LAUNCH_AGENT)
 	@echo "Loaded $(LAUNCH_AGENT)"

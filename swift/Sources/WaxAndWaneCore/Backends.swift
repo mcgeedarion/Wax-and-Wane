@@ -44,20 +44,41 @@ func trustedPathEntries() -> [String] {
     safePathEntries.filter(directoryTrusted)
 }
 
-func resolveExecutable(_ command: String) -> String? {
+// Homebrew links bin/<helper> into Cellar/<formula>/<version>/bin/<helper>.
+let safeHelperTargetRoots = safePathEntries + ["/usr/local/Cellar", "/opt/homebrew/Cellar"]
+
+func executableTrusted(_ path: String, within root: String) -> Bool {
     let fm = FileManager.default
-    let trustedEntries = trustedPathEntries()
-    if trustedEntries.isEmpty {
-        fputs("Warning: no trusted helper directories are available.\n", stderr)
-        return nil
+    guard path.hasPrefix(root + "/"), fm.isExecutableFile(atPath: path) else { return false }
+    var directory = URL(fileURLWithPath: path).deletingLastPathComponent().path
+    while true {
+        guard directoryTrusted(directory) else { return false }
+        if directory == root { break }
+        directory = URL(fileURLWithPath: directory).deletingLastPathComponent().path
     }
+    guard let attrs = try? fm.attributesOfItem(atPath: path),
+          attrs[.type] as? FileAttributeType == .typeRegular else { return false }
+    let mode = (attrs[.posixPermissions] as? NSNumber)?.uint16Value ?? 0o777
+    let owner = (attrs[.ownerAccountID] as? NSNumber)?.uint32Value ?? UInt32.max
+    let uid = geteuid()
+    return mode & 0o022 == 0 && (owner == 0 || (uid != 0 && owner == uid))
+}
+
+func resolveExecutable(
+    _ command: String,
+    searchPaths: [String] = safePathEntries,
+    targetRoots: [String] = safeHelperTargetRoots
+) -> String? {
+    guard !command.isEmpty, command != ".", command != "..", !command.contains("/") else { return nil }
+    let fm = FileManager.default
+    let trustedEntries = searchPaths.filter(directoryTrusted)
+    let roots = targetRoots.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
     for base in trustedEntries {
         let candidate = URL(fileURLWithPath: base).appendingPathComponent(command).path
         guard fm.isExecutableFile(atPath: candidate) else { continue }
         let real = URL(fileURLWithPath: candidate).resolvingSymlinksInPath().path
-        let inTrusted = trustedEntries.contains { prefix in real == prefix || real.hasPrefix(prefix + "/") }
-        if inTrusted { return real }
-        fputs("Warning: ignoring unsafe symlink target for \(command): \(real)\n", stderr)
+        if roots.contains(where: { executableTrusted(real, within: $0) }) { return real }
+        fputs("Warning: ignoring unsafe helper target for \(command): \(real)\n", stderr)
     }
     return nil
 }
@@ -185,7 +206,7 @@ struct BackendCandidate {
 func keyboardCandidates() -> [BackendCandidate] {
     [
         BackendCandidate(name: "kbrightness", builder: { [String(format: "%.3f", $0)] }, reader: nil, parser: nil, min: 0, max: 1),
-        BackendCandidate(name: "mac-brightnessctl", builder: { [String(Int($0 * 100))] }, reader: nil, parser: nil, min: 0, max: 1),
+        BackendCandidate(name: "mac-brightnessctl", builder: { [String(format: "%.3f", $0)] }, reader: nil, parser: nil, min: 0, max: 1),
     ]
 }
 

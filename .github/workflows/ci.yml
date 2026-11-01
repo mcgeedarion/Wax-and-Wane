@@ -3,13 +3,14 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, work]
+    branches: [main, work, fix/brightness-backends-and-lifecycle]
 
 jobs:
   swift-macos:
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s packaging -p 'test_*.py'
       - run: cd swift && swift test
       - run: cd swift && swift build -c release
       - run: cd swift && .build/release/wax-and-wane print-default-config >/tmp/wax-and-wane.config.json
