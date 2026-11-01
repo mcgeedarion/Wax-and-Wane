@@ -34,6 +34,7 @@ final class RuntimeGuard {
     }
 
     var shouldExit: Bool { maxRuntime > 0 && Date().timeIntervalSince(start) >= maxRuntime }
+    var remainingRuntime: TimeInterval { max(0, maxRuntime - Date().timeIntervalSince(start)) }
 
     func maybeRemind() {
         guard reminderInterval > 0, Date().timeIntervalSince(lastReminder) >= reminderInterval else { return }
@@ -133,111 +134,110 @@ func runDoctor() {
 }
 
 func runApplication(settings: Settings) throws {
-    configureNotifications()
-
+    try validateSettings(settings)
     let keyboardEnabled = settings.keyboardControl != .system
     let screenEnabled = settings.screenControl != .system
     let keyboardBackend = keyboardEnabled ? detectBackend(kind: .keyboard, preferredName: settings.keyboardBackend, dryRun: settings.dryRun) : nil
     let screenBackend = screenEnabled ? detectBackend(kind: .screen, preferredName: settings.screenBackend, dryRun: settings.dryRun) : nil
-
-    if !keyboardEnabled && !screenEnabled {
-        fputs("Error: keyboard and screen are both set to system control; nothing to adjust.\n", stderr)
-        exit(1)
-    }
-    if keyboardEnabled && keyboardBackend == nil && screenEnabled && screenBackend != nil {
+    let plan = try OutputPlan(settings: settings, keyboardAvailable: keyboardBackend != nil, screenAvailable: screenBackend != nil)
+    if keyboardEnabled && keyboardBackend == nil {
         fputs("Warning: keyboard control unavailable; continuing with screen control only.\n", stderr)
     }
-    if screenEnabled && screenBackend == nil && keyboardEnabled && keyboardBackend != nil {
+    if screenEnabled && screenBackend == nil {
         fputs("Warning: screen control unavailable; continuing with keyboard control only.\n", stderr)
     }
-    if (keyboardEnabled && keyboardBackend == nil) && (screenEnabled && screenBackend == nil) {
-        fputs("Error: no enabled output backends available. Install a backend or set that channel to system control.\n", stderr)
-        exit(1)
+
+    let lifecycle = RuntimeLifecycle()
+    let sigIntSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global(qos: .userInitiated))
+    let sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global(qos: .userInitiated))
+    let previousInt = signal(SIGINT, SIG_IGN)
+    let previousTerm = signal(SIGTERM, SIG_IGN)
+    sigIntSource.setEventHandler { lifecycle.requestStop() }
+    sigTermSource.setEventHandler { lifecycle.requestStop() }
+    sigIntSource.resume()
+    sigTermSource.resume()
+    defer {
+        sigIntSource.cancel()
+        sigTermSource.cancel()
+        signal(SIGINT, previousInt)
+        signal(SIGTERM, previousTerm)
     }
 
     let originalKeyboard = settings.restoreOriginalBrightness ? keyboardBackend?.currentBrightness() : nil
     let originalScreen = settings.restoreOriginalBrightness ? screenBackend?.currentBrightness() : nil
-
-    let restoreLock = NSLock()
-    var restored = false
-    func restoreDefaults() {
-        restoreLock.lock()
-        guard !restored else { restoreLock.unlock(); return }
-        restored = true
-        restoreLock.unlock()
-        if settings.keyboardControl != .system { _ = keyboardBackend?.set(originalKeyboard ?? settings.defaultKeyboardBrightness) }
-        if settings.screenControl != .system { _ = screenBackend?.set(originalScreen ?? settings.defaultScreenBrightness) }
+    var keyboardWritten = false
+    var screenWritten = false
+    var sampler: BrightnessSampler?
+    defer {
+        sampler?.stop()
+        lifecycle.finish {
+            if keyboardWritten { _ = keyboardBackend?.set(originalKeyboard ?? settings.defaultKeyboardBrightness) }
+            if screenWritten { _ = screenBackend?.set(originalScreen ?? settings.defaultScreenBrightness) }
+        }
     }
 
-    let semaphore = DispatchSemaphore(value: 0)
-    AVCaptureDevice.requestAccess(for: .video) { granted in
-        if !granted { fputs("Camera access denied.\nSystem Settings → Privacy & Security → Camera\n", stderr) }
-        semaphore.signal()
+    if plan.needsCamera {
+        if lifecycle.isStopping { return }
+        configureNotifications()
+        let semaphore = DispatchSemaphore(value: 0)
+        AVCaptureDevice.requestAccess(for: .video) { _ in semaphore.signal() }
+        while semaphore.wait(timeout: .now() + 0.1) == .timedOut {
+            if lifecycle.isStopping { return }
+        }
+        if lifecycle.isStopping { return }
+        guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+            throw SettingsError.invalid("Camera access denied. Grant access in System Settings → Privacy & Security → Camera.")
+        }
+        let camera = BrightnessSampler()
+        sampler = camera
+        try camera.start()
+        if lifecycle.isStopping { return }
+        postNotification(title: "Wax and Wane", body: "Camera is now active to adjust brightness.")
     }
-    semaphore.wait()
-    guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { exit(1) }
-
-    let sampler = BrightnessSampler()
-    do { try sampler.start() } catch {
-        fputs("Camera error: \(error.localizedDescription)\n", stderr)
-        exit(1)
-    }
-
-    postNotification(title: "Wax and Wane", body: "Camera is now active to adjust keyboard and screen brightness.")
 
     var history = RingBuffer(capacity: settings.smoothingWindow)
     var lastKeyboard: Float = originalKeyboard ?? -1.0
     var lastScreen: Float = originalScreen ?? -1.0
     var lastWrite = Date.distantPast
     let runtimeGuard = RuntimeGuard(s: settings)
+    print(plan.needsCamera ? "Ambient backlight running (camera active). Press Ctrl+C to stop." : "Manual brightness control running (camera off). Press Ctrl+C to stop.")
+    if settings.dryRun { print("Dry-run mode: no brightness writes will be performed.") }
 
-    let sigIntSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: .global(qos: .userInitiated))
-    let sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global(qos: .userInitiated))
-    signal(SIGINT, SIG_IGN)
-    signal(SIGTERM, SIG_IGN)
-    let handleTermination: () -> Void = {
-        print("\nRestoring brightness…")
-        restoreDefaults()
-        sampler.stop()
-        exit(0)
-    }
-    sigIntSource.setEventHandler(handler: handleTermination)
-    sigTermSource.setEventHandler(handler: handleTermination)
-    sigIntSource.resume()
-    sigTermSource.resume()
-
-    print("Ambient backlight running (camera active). Press Ctrl+C to stop.\n")
-    if settings.dryRun { print("Dry-run mode: no brightness writes will be performed.\n") }
-
-    while true {
+    while !lifecycle.isStopping {
         if runtimeGuard.shouldExit {
             print("Max runtime reached. Stopping.")
-            restoreDefaults()
-            sampler.stop()
+            lifecycle.requestStop()
             break
         }
-        runtimeGuard.maybeRemind()
-
-        let ambientNow = sampler.currentBrightness
+        if plan.needsCamera { runtimeGuard.maybeRemind() }
+        let ambientNow = sampler?.currentBrightness ?? 0.5
         let (newKbd, newScr) = computeTargets(history: &history, ambientNow: ambientNow, lastKeyboard: lastKeyboard, lastScreen: lastScreen, s: settings)
         let mayWrite = Date().timeIntervalSince(lastWrite) >= settings.minUpdateIntervalSeconds
-
-        if mayWrite, let v = newKbd, let backend = keyboardBackend, backend.set(v) {
+        if mayWrite, let v = newKbd, let backend = keyboardBackend,
+           lifecycle.write({ keyboardWritten = true; return backend.set(v) }) {
             lastKeyboard = v
             lastWrite = Date()
         }
-        if mayWrite, let v = newScr, let backend = screenBackend, backend.set(v) {
+        if mayWrite, let v = newScr, let backend = screenBackend,
+           lifecycle.write({ screenWritten = true; return backend.set(v) }) {
             lastScreen = v
             lastWrite = Date()
         }
-
-        let rawSmoothed = history.isEmpty ? ambientNow : history.mean
-        let calibrated = normalizeAmbient(rawSmoothed, dark: settings.ambientDark, bright: settings.ambientBright, gamma: settings.outputGamma)
         let keyboardStatus = settings.keyboardControl == .system ? "system" : (keyboardBackend == nil ? "unavailable" : String(format: "%.0f%%", lastKeyboard * 100))
         let screenStatus = settings.screenControl == .system ? "system" : (screenBackend == nil ? "unavailable" : String(format: "%.0f%%", lastScreen * 100))
-        print(String(format: "Ambient raw %.3f calibrated %.3f → Keyboard %@ | Screen %@", rawSmoothed, calibrated, keyboardStatus, screenStatus))
-        Thread.sleep(forTimeInterval: settings.pollIntervalSeconds)
+        if plan.needsCamera {
+            let rawSmoothed = history.mean
+            let calibrated = normalizeAmbient(rawSmoothed, dark: settings.ambientDark, bright: settings.ambientBright, gamma: settings.outputGamma)
+            print(String(format: "Ambient raw %.3f calibrated %.3f → Keyboard %@ | Screen %@", rawSmoothed, calibrated, keyboardStatus, screenStatus))
+        } else {
+            print("Camera off → Keyboard \(keyboardStatus) | Screen \(screenStatus)")
+        }
+        let remaining = settings.maxCameraRuntimeSeconds > 0
+            ? min(settings.pollIntervalSeconds, runtimeGuard.remainingRuntime)
+            : settings.pollIntervalSeconds
+        lifecycle.wait(seconds: remaining)
     }
+    print("Restoring brightness…")
 }
 
 #else
